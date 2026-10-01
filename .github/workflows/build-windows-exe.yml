@@ -1,0 +1,96 @@
+name: Build Windows exe
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    tags: ["v*"]
+    paths:
+      - "app/**"
+      - "skills/**"
+      - "packaging/**"
+      - "tests/**"
+      - ".github/workflows/build-windows-exe.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "skills/**"
+      - "packaging/**"
+      - "tests/**"
+      - ".github/workflows/build-windows-exe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to publish the release on v* tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-build.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/requirements-build.txt
+
+      - name: Smoke test the skill script (source)
+        run: python tests/smoke_test.py
+
+      - name: Build markitdown.exe
+        run: pyinstaller --noconfirm --clean packaging/markitdown.spec
+
+      - name: Smoke test markitdown.exe (CLI)
+        run: python tests/smoke_test.py --cmd dist/markitdown.exe
+
+      - name: Smoke test the GUI
+        run: python tests/gui_smoke_test.py --exe dist/markitdown.exe --screenshots screenshots
+
+      - name: Package skill zips and checksums
+        shell: pwsh
+        run: |
+          python packaging/package_skill.py --exe dist/markitdown.exe
+          Get-ChildItem dist/markitdown.exe, dist/*.zip |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: markitdown-windows
+          path: |
+            dist/markitdown.exe
+            dist/markitdown-skill.zip
+            dist/markitdown-skill-windows.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload GUI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MarkItDown for Windows ${{ github.ref_name }}
+          body_path: packaging/RELEASE_NOTES.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/markitdown.exe
+            dist/markitdown-skill.zip
+            dist/markitdown-skill-windows.zip
+            dist/SHA256SUMS.txt

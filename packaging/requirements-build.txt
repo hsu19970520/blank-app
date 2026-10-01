@@ -1,0 +1,5 @@
+# Everything needed to build markitdown.exe (pinned for reproducible builds).
+markitdown[all]==0.1.8
+pyinstaller==6.22.3
+# Optional: lets users drag files straight into the GUI window.
+tkinterdnd2==0.6.3
