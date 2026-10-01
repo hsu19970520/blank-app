@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore", message=".*ffmpeg.*", category=RuntimeWarning)
 # it loads. Set ORT_DISABLE_TELEMETRY=0 to allow it.
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 
 # File types MarkItDown can convert. Used when scanning folders; explicit file
 # arguments are always attempted regardless of extension.
@@ -209,8 +209,13 @@ def plan_output(
 def build_converter(
     use_plugins: bool = False,
     docintel_endpoint: Optional[str] = None,
+    classic_xlsx: bool = False,
 ):
-    """Create the MarkItDown instance (slow: loads the Magika model)."""
+    """Create the MarkItDown instance (slow: loads the Magika model).
+
+    Unless ``classic_xlsx`` is set, .xlsx/.xlsm files go through the faithful
+    Excel converter in xlsx_converter.py instead of MarkItDown's pandas one.
+    """
     from markitdown import MarkItDown
 
     if os.environ.get("ORT_DISABLE_TELEMETRY") == "1":
@@ -224,7 +229,13 @@ def build_converter(
     kwargs = {"enable_plugins": use_plugins}
     if docintel_endpoint:
         kwargs["docintel_endpoint"] = docintel_endpoint
-    return MarkItDown(**kwargs)
+    markitdown = MarkItDown(**kwargs)
+    if not classic_xlsx:
+        from xlsx_converter import XlsxConverter
+
+        # Registered last at the default priority, so it is tried before the built-in one.
+        markitdown.register_converter(XlsxConverter())
+    return markitdown
 
 
 def make_stream_info(extension: Optional[str], mime_type: Optional[str], charset: Optional[str]):
@@ -241,12 +252,13 @@ def make_stream_info(extension: Optional[str], mime_type: Optional[str], charset
     return StreamInfo(extension=extension or None, mimetype=mime_type or None, charset=charset or None)
 
 
-def convert_source(converter, source: Source, stream_info=None, keep_data_uris: bool = False) -> str:
+def convert_source(converter, source: Source, stream_info=None, keep_data_uris: bool = False, **options) -> str:
+    """``options`` are passed through to the converters (e.g. xlsx_visible_only)."""
     if source.is_stdin:
         data = io.BytesIO(sys.stdin.buffer.read())
-        result = converter.convert_stream(data, stream_info=stream_info, keep_data_uris=keep_data_uris)
+        result = converter.convert_stream(data, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
     else:
-        result = converter.convert(source.value, stream_info=stream_info, keep_data_uris=keep_data_uris)
+        result = converter.convert(source.value, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
     return result.markdown or ""
 
 
@@ -267,6 +279,7 @@ def convert_batch(
     on_result: Optional[Callable[[int, int, Result], None]] = None,
     on_start: Optional[Callable[[int, int, Source], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
+    options: Optional[dict] = None,
 ) -> List[Result]:
     """Convert every source to its own .md file. Shared by the CLI and the GUI.
 
@@ -286,7 +299,7 @@ def convert_batch(
             result = Result(source, output, None, None)
         else:
             try:
-                markdown = convert_source(converter, source, stream_info, keep_data_uris)
+                markdown = convert_source(converter, source, stream_info, keep_data_uris, **(options or {}))
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_text(markdown, encoding="utf-8")
                 result = Result(source, output, markdown, None)
@@ -334,6 +347,18 @@ def build_parser(prog: str = "markitdown") -> argparse.ArgumentParser:
     parser.add_argument("-m", "--mime-type", help="MIME-type hint")
     parser.add_argument("-c", "--charset", help="charset hint, e.g. UTF-8 or big5")
     parser.add_argument("-p", "--use-plugins", action="store_true", help="enable installed 3rd-party MarkItDown plugins")
+    excel = parser.add_argument_group("Excel (.xlsx / .xlsm)")
+    excel.add_argument(
+        "--xlsx-header-row", action="append", default=[], metavar="SHEET=ROW",
+        help="header row for a sheet, e.g. \"Report=14\" (0 = no header); repeatable. "
+             "Default: detected from the autofilter, pivot layout or freeze panes",
+    )
+    excel.add_argument("--xlsx-visible-only", action="store_true",
+                       help="leave out hidden sheets, rows and columns (as seen in Excel)")
+    excel.add_argument("--xlsx-raw-values", action="store_true",
+                       help="full-precision numbers instead of Excel's display format")
+    excel.add_argument("--xlsx-classic", action="store_true",
+                       help="use MarkItDown's original pandas-based Excel converter")
     parser.add_argument(
         "--docintel-endpoint",
         default=os.environ.get("MARKITDOWN_DOCINTEL_ENDPOINT") or None,
@@ -393,7 +418,17 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
     except LookupError:
         parser.error(f"unknown charset: {args.charset}")
 
-    converter = build_converter(args.use_plugins, args.docintel_endpoint)
+    header_rows = {}
+    for spec in args.xlsx_header_row:
+        sheet, sep, row = spec.rpartition("=")
+        if not sep or not sheet or not row.strip().isdigit():
+            parser.error(f'--xlsx-header-row expects SHEET=ROW, e.g. "Report=14" (got {spec!r})')
+        header_rows[sheet.strip()] = int(row)
+    options = {"xlsx_visible_only": args.xlsx_visible_only, "xlsx_raw_values": args.xlsx_raw_values}
+    if header_rows:
+        options["xlsx_header_rows"] = header_rows
+
+    converter = build_converter(args.use_plugins, args.docintel_endpoint, classic_xlsx=args.xlsx_classic)
 
     single_to_stdout = len(sources) == 1 and not args.output and not args.out_dir
     has_folder_input = any(s.scan_root is not None for s in sources)
@@ -402,7 +437,7 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         failures = 0
         for source in sources:
             try:
-                markdown = convert_source(converter, source, stream_info, args.keep_data_uris)
+                markdown = convert_source(converter, source, stream_info, args.keep_data_uris, **options)
             except Exception as exc:
                 failures += 1
                 print(f"[FAIL] {source.value}: {describe_error(exc)}", file=sys.stderr)
@@ -415,7 +450,7 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
     if args.output:
         source = sources[0]
         try:
-            markdown = convert_source(converter, source, stream_info, args.keep_data_uris)
+            markdown = convert_source(converter, source, stream_info, args.keep_data_uris, **options)
         except Exception as exc:
             print(f"[FAIL] {source.value}: {describe_error(exc)}", file=sys.stderr)
             return 1
@@ -446,6 +481,7 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         keep_data_uris=args.keep_data_uris,
         skip_existing=args.skip_existing,
         on_result=report,
+        options=options,
     )
     failed = sum(1 for r in results if not r.ok)
     print(f"Done: {len(results) - failed} succeeded, {failed} failed.")

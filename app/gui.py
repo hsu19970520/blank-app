@@ -232,6 +232,7 @@ class ConverterWindow:
         self.recursive = tk.BooleanVar(value=True)
         self.skip_existing = tk.BooleanVar(value=False)
         self.keep_data_uris = tk.BooleanVar(value=False)
+        self.xlsx_visible_only = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar()
         self.url_text = tk.StringVar()
 
@@ -465,6 +466,7 @@ class ConverterWindow:
         options_menu.add_checkbutton(label="加入資料夾時包含子資料夾", variable=self.recursive, command=self._rescan_folders)
         options_menu.add_checkbutton(label="略過已經有 .md 的檔案", variable=self.skip_existing)
         options_menu.add_checkbutton(label="在 Markdown 中保留內嵌圖片（base64）", variable=self.keep_data_uris)
+        options_menu.add_checkbutton(label="Excel：只輸出看得到的工作表、列和欄", variable=self.xlsx_visible_only)
         self.options_button["menu"] = options_menu
 
         # Content: the list of documents and the Markdown preview, side by side.
@@ -856,7 +858,8 @@ class ConverterWindow:
         self.progress.configure(mode="determinate", maximum=len(targets), value=0)
         self.progress.grid()
         self._refresh()
-        jobs = (targets, out_dir, self.skip_existing.get(), self.keep_data_uris.get())
+        jobs = (targets, out_dir, self.skip_existing.get(), self.keep_data_uris.get(),
+                {"xlsx_visible_only": self.xlsx_visible_only.get()})
         threading.Thread(target=self._worker, args=jobs, daemon=True).start()
 
     def reconvert_selected(self) -> None:
@@ -869,7 +872,7 @@ class ConverterWindow:
             self.stop_event.set()
             self._set_status("正在停止，目前的檔案完成後就會停下…")
 
-    def _worker(self, targets, out_dir, skip_existing, keep_data_uris) -> None:
+    def _worker(self, targets, out_dir, skip_existing, keep_data_uris, options) -> None:
         try:
             if self.converter is None:
                 self.events.put(("waiting_engine",))
@@ -889,6 +892,7 @@ class ConverterWindow:
                     on_start=lambda n, _t, _s, ids=iids: self.events.put(("working", ids[n - 1])),
                     on_result=lambda n, _t, r, ids=iids: self.events.put(("result", ids[n - 1], r)),
                     should_stop=self.stop_event.is_set,
+                    options=options,
                 )
         except Exception as exc:
             self.events.put(("log", f"錯誤：{convert.describe_error(exc)}"))

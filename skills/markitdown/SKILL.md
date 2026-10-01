@@ -34,6 +34,11 @@ Check it works with `RUN --version`.
 | Bytes from stdin | `RUN -x pdf < file.bin` |
 | Print a whole batch to stdout | `RUN a.pdf b.pdf --stdout` |
 
+Excel options: `--xlsx-header-row "SHEET=ROW"` (override the detected header row;
+repeatable), `--xlsx-visible-only` (leave out hidden sheets / rows / columns, i.e. what
+Excel shows), `--xlsx-raw-values` (full-precision numbers instead of Excel's display
+format), `--xlsx-classic` (MarkItDown's original pandas converter).
+
 Other options: `--skip-existing` (resume a batch), `--keep-data-uris` (keep base64
 images), `-c big5` (charset hint for legacy text/CSV files), `-x`/`-m` (extension /
 MIME hints), `-p` (enable installed MarkItDown plugins),
@@ -63,7 +68,19 @@ Batch runs report each item as `(i/n) [OK] src -> dest.md`.
 
 - **PDF:** text layer only. A scanned PDF with no text layer yields little or no
   output. Say so, and suggest OCR or `--docintel-endpoint`.
-- **Excel:** every sheet becomes a `## SheetName` section with a Markdown table.
+- **Excel (.xlsx/.xlsm):** a workbook overview table first (sheet, visible/hidden, range,
+  where the header came from), then one `## SheetName` section per sheet; hidden sheets
+  are grouped at the end under `# 隱藏的工作表`. In each table the first column `列` is the
+  Excel row number and every column name ends with its Excel letter, e.g. `MPN (A)`, so
+  you can point the user to exact cells. `(隱)` / `·隱` mark rows / columns hidden in
+  Excel (often by an active autofilter, described under `#### 自動篩選`). The header row
+  comes from the autofilter, pivot layout or freeze panes; rows above it (totals,
+  parameters) are shown separately. Numbers appear exactly as Excel displays them
+  (`12,345,678`, `(1,234)`, `206.92%`, ISO dates). Comments (`[註n]`), data validation,
+  merged cells and pivot tables (fields, source, last refresh) are listed per sheet.
+  Formulas are not kept: values are the results cached at the last save, and pivot
+  tables are snapshots. Conditional formatting (red/yellow/green) is not rendered yet.
+  Big workbooks produce big Markdown: write to a file with `-o` and read it in parts.
 - **PowerPoint:** one section per slide, including tables, chart data, and speaker notes.
 - **Word:** headings, lists, tables, and links are preserved. Equations become LaTeX.
 - **Images:** no OCR offline. Output is EXIF metadata, and only if `exiftool` is

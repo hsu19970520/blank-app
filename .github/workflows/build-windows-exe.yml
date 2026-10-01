@@ -46,13 +46,17 @@ jobs:
           python -m pip install -r packaging/requirements-build.txt
 
       - name: Smoke test the skill script (source)
-        run: python tests/smoke_test.py
+        run: |
+          python tests/smoke_test.py
+          python tests/xlsx_test.py
 
       - name: Build markitdown.exe
         run: pyinstaller --noconfirm --clean packaging/markitdown.spec
 
       - name: Smoke test markitdown.exe (CLI)
-        run: python tests/smoke_test.py --cmd dist/markitdown.exe
+        run: |
+          python tests/smoke_test.py --cmd dist/markitdown.exe
+          python tests/xlsx_test.py --cmd dist/markitdown.exe
 
       - name: Smoke test the GUI
         run: |

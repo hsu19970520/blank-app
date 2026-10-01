@@ -45,6 +45,7 @@ markitdown.exe --help                            :: 全部選項
 > - 執行檔沒有數位簽章，第一次執行時 Windows SmartScreen 可能會阻擋。請按「其他資訊」再按「仍要執行」。
 > - 單一執行檔每次啟動都要先解壓縮，大約需要幾秒鐘。
 > - 掃描版 PDF（只有圖片、沒有文字層）轉不出文字，需要搭配 OCR 或 Azure Document Intelligence（`--docintel-endpoint`）。
+> - Excel（.xlsx/.xlsm）使用本專案改寫的轉換器：自動找出真正的表頭列（依自動篩選、樞紐分析表或凍結窗格），數字依 Excel 格式顯示（不會變成科學記號）；註解、自動篩選、合併儲存格、資料驗證、樞紐分析表和隱藏的工作表／列／欄都會標示出來。公式只保留上次存檔時的計算結果，條件式格式（紅黃綠燈號）目前還不會顯示。相關選項：`--xlsx-header-row "工作表=列"`、`--xlsx-visible-only`、`--xlsx-raw-values`、`--xlsx-classic`。
 > - MarkItDown 用來判斷檔案類型的 ONNX Runtime 預設會傳送使用統計給 Microsoft。本工具預設關閉這項功能；如果想開啟，請設定環境變數 `ORT_DISABLE_TELEMETRY=0`。
 
 ## 安裝 Claude skill
@@ -88,6 +89,7 @@ python app/markitdown_app.py            # 圖形介面
 ```
 skills/markitdown/SKILL.md            Claude skill 說明（Claude 讀這個檔案）
 skills/markitdown/scripts/convert.py  轉換核心：CLI 與批次轉換（skill 和 exe 共用）
+skills/markitdown/scripts/xlsx_converter.py  Excel 轉換器（保留表頭、格式與結構資訊）
 app/markitdown_app.py                 exe 進入點：圖形介面 / 拖曳 / 命令列
 app/gui.py                            圖形介面（Windows 11 風格、淺色／深色）
 app/assets/                           App 圖示（由 packaging/make_icon.py 產生）
@@ -97,6 +99,7 @@ packaging/build_windows.bat           Windows 本機建置腳本
 packaging/package_skill.py            打包 skill zip
 tests/smoke_test.py                   各格式端對端測試（可測 .py 或 .exe）
 tests/gui_smoke_test.py               圖形介面測試
+tests/xlsx_test.py                    Excel 轉換測試（表頭、數字格式、隱藏、註解、樞紐）
 .github/workflows/build-windows-exe.yml  Windows 自動建置、測試與發佈
 ```
 

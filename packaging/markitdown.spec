@@ -25,7 +25,7 @@ datas += [(os.path.join(ROOT, "app", "assets"), "assets")]
 hiddenimports = []
 # Converters are imported dynamically inside try/except blocks.
 hiddenimports += collect_submodules("markitdown")
-hiddenimports += ["convert", "gui", "sv_ttk"]
+hiddenimports += ["convert", "xlsx_converter", "gui", "sv_ttk"]
 
 a = Analysis(
     [os.path.join(ROOT, "app", "markitdown_app.py")],
