@@ -34,6 +34,8 @@ M = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS = "{%s}" % M
 R_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 TC = "{http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments}"
+X14 = "{http://schemas.microsoft.com/office/spreadsheetml/2009/9/main}"
+XM = "{http://schemas.microsoft.com/office/excel/2006/main}"
 
 ACCEPTED_EXTENSIONS = (".xlsx", ".xlsm")
 ACCEPTED_MIME_PREFIXES = (
@@ -456,7 +458,8 @@ class WorkbookReader:
             elif tag == "autoFilter" and el.getparent() is not None and el.getparent().tag == NS + "worksheet":
                 sheet.autofilter = el.get("ref")
                 sheet.filter_columns = self._describe_filter(el)
-            elif tag == "dataValidation":
+            elif tag in ("dataValidation", X14 + "dataValidation"):
+                # Lists sourced from another sheet are stored in the x14 extension.
                 sheet.validations.append(self._describe_validation(el))
         self._read_sheet_parts(sheet)
 
@@ -545,8 +548,16 @@ class WorkbookReader:
         ops = {"between": "介於", "notBetween": "不介於", "equal": "等於", "notEqual": "不等於",
                "greaterThan": "大於", "lessThan": "小於", "greaterThanOrEqual": "大於等於",
                "lessThanOrEqual": "小於等於"}
-        f1 = dv.findtext(NS + "formula1") or dv.findtext("{http://schemas.microsoft.com/office/excel/2006/main}f") or ""
-        f2 = dv.findtext(NS + "formula2") or ""
+        if dv.tag == X14 + "dataValidation":  # x14: range and formulas are child elements
+            sqref = dv.findtext(XM + "sqref") or ""
+            f1 = dv.findtext(f"{X14}formula1/{XM}f") or ""
+            f2 = dv.findtext(f"{X14}formula2/{XM}f") or ""
+        else:
+            sqref = dv.get("sqref", "")
+            f1 = dv.findtext(NS + "formula1") or ""
+            f2 = dv.findtext(NS + "formula2") or ""
+        ranges = sqref.split()
+        where = "、".join(ranges[:4]) + (f" 等 {len(ranges)} 段" if len(ranges) > 4 else "")
         if kind == "list":
             rule = f"選項：{f1.strip(chr(34)).replace(',', '、')}" if f1.startswith('"') else f"選項來自 {f1}"
         elif kind == "custom":
@@ -556,7 +567,7 @@ class WorkbookReader:
             rule = f"{op} {f1}" + (f" 和 {f2}" if f2 else "")
         else:
             rule = ""
-        text = f"{dv.get('sqref', '')}：{names.get(kind, kind)}" + (f"，{rule}" if rule else "")
+        text = f"{where}：{names.get(kind, kind)}" + (f"，{rule}" if rule else "")
         prompt = dv.get("prompt")
         if prompt:
             text += f"（提示：{prompt}）"

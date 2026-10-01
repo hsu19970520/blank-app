@@ -46,6 +46,15 @@ CACHE_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </pivotCacheDefinition>"""
 
 
+X14_VALIDATION = (
+    '<extLst><ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}" '
+    'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">'
+    '<x14:dataValidations count="1" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">'
+    '<x14:dataValidation type="list" allowBlank="1"><x14:formula1><xm:f>Report!$F$15:$F$17</xm:f></x14:formula1>'
+    "<xm:sqref>A3:A10 C3:C5 D3:D5 E3:E5 F3:F5</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst>"
+)
+
+
 def build_workbook(path: Path) -> None:
     from openpyxl import Workbook
     from openpyxl.comments import Comment
@@ -120,13 +129,19 @@ def build_workbook(path: Path) -> None:
     hidden.sheet_state = "hidden"
     wb.save(path)
 
-    # openpyxl can't write pivot tables: add a minimal one to the "Pivot" sheet.
+    # openpyxl can't write pivot tables or x14 data validation (a list sourced from
+    # another sheet, as Excel saves it): add a minimal pivot to "Pivot" and an
+    # x14 validation to "Merged".
     pivot_index = wb.sheetnames.index("Pivot") + 1
+    merged_name = f"xl/worksheets/sheet{wb.sheetnames.index('Merged') + 1}.xml"
     tmp = path.with_suffix(".tmp")
     with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
         rels_name = f"xl/worksheets/_rels/sheet{pivot_index}.xml.rels"
         for item in src.infolist():
-            if item.filename != rels_name:
+            if item.filename == merged_name:
+                xml = src.read(item.filename).decode("utf-8")
+                dst.writestr(item, xml.replace("</worksheet>", X14_VALIDATION + "</worksheet>"))
+            elif item.filename != rels_name:
                 dst.writestr(item, src.read(item.filename))
         dst.writestr(
             rels_name,
@@ -205,6 +220,8 @@ def main() -> int:
         check("freeze panes", "凍結窗格：前 14 列、前 1 欄" in dns)
         merged = section(md, "Merged")
         check("merged header cell fills the column name", "Date (B)" in merged and "B1:B2" in merged, merged)
+        check("x14 data validation (list from another sheet)",
+              "A3:A10、C3:C5、D3:D5、E3:E5 等 5 段：清單，選項來自 Report!$F$15:$F$17" in merged, merged)
         pivot = section(md, "Pivot")
         check("pivot gets its own block", "### 樞紐分析表「PivotFixture」（A3:B6）" in pivot, pivot)
         check("pivot header from its layout", "| 列 | Brand (A) | 加總 - Qty (B) |" in pivot)
