@@ -18,9 +18,14 @@ on:
       - "tests/**"
       - ".github/workflows/build-windows-exe.yml"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish a GitHub release with this tag (e.g. v1.0.0); leave empty to only build"
+        required: false
+        default: ""
 
 permissions:
-  contents: write # needed to publish the release on v* tags
+  contents: write # needed to publish releases
 
 jobs:
   build:
@@ -83,10 +88,13 @@ jobs:
           if-no-files-found: ignore
 
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag
         uses: softprops/action-gh-release@v2
         with:
-          name: MarkItDown for Windows ${{ github.ref_name }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: MarkItDown for Windows ${{ inputs.release_tag || github.ref_name }}
+          make_latest: true
           body_path: packaging/RELEASE_NOTES.md
           fail_on_unmatched_files: true
           files: |

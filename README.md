@@ -67,7 +67,7 @@ packaging\build_windows.bat
 
 產出的檔案在 `dist\`。
 
-**用 GitHub Actions**：推送到 `main` 或 `claude/**` 分支，會自動建置並上傳 Artifact。推送 `v*` 標籤（例如 `v1.0.0`）則會另外建立 Release。
+**用 GitHub Actions**：推送到 `main` 或 `claude/**` 分支，會自動建置並上傳 Artifact。要發佈 Release，可以推送 `v*` 標籤（例如 `v1.0.0`），或到 Actions → Build Windows exe → Run workflow，填入 `release_tag` 後執行。
 
 **只用 Python（任何作業系統）**：
 
