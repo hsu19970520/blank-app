@@ -1,5 +1,11 @@
 把 Microsoft [MarkItDown](https://github.com/microsoft/markitdown) 打包成 Windows 執行檔和 Claude skill，可以把 PDF、Word、PowerPoint、Excel、HTML、CSV、JSON、XML、EPUB、ZIP、Outlook .msg、Jupyter Notebook 和網頁（包含 YouTube、Wikipedia）轉成 Markdown。
 
+## 這個版本的更新
+
+- 重新設計圖形介面：採用 Windows 11 風格並支援深色模式。檔案清單直接顯示每個項目的狀態，右邊可以預覽 Markdown。轉換途中可以停止，失敗時會說明原因和解決方法。另外加入了選單列、快速鍵和右鍵選單。
+- 新的 App 圖示。
+- 預設關閉 ONNX Runtime 傳送給 Microsoft 的使用統計。
+
 ## 下載哪一個？
 
 | 檔案 | 用途 |
@@ -11,7 +17,7 @@
 
 ## markitdown.exe 用法
 
-- **雙擊**：開啟圖形介面，可以加入檔案、資料夾或網址，再按「開始轉換」。
+- **雙擊**：開啟圖形介面。把檔案或資料夾拖進視窗，按「轉換」。左邊清單會顯示每個項目的狀態，右邊可以預覽、複製 Markdown。外觀會跟著 Windows 的淺色／深色設定切換。
 - **拖曳**：把檔案或資料夾拖到 `markitdown.exe` 圖示上，會在原位置產生 `.md`。
 - **命令列**：
   ```

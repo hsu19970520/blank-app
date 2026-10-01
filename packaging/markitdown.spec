@@ -18,11 +18,14 @@ datas += collect_data_files("magika")
 # Distribution metadata some packages read through importlib.metadata.
 for dist in ("markitdown", "magika"):
     datas += copy_metadata(dist)
+# GUI: Sun Valley (Windows 11) theme files and the app icon.
+datas += collect_data_files("sv_ttk")
+datas += [(os.path.join(ROOT, "app", "assets"), "assets")]
 
 hiddenimports = []
 # Converters are imported dynamically inside try/except blocks.
 hiddenimports += collect_submodules("markitdown")
-hiddenimports += ["convert"]
+hiddenimports += ["convert", "gui", "sv_ttk"]
 
 a = Analysis(
     [os.path.join(ROOT, "app", "markitdown_app.py")],
@@ -57,4 +60,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=os.path.join(ROOT, "app", "assets", "icon.ico"),
 )

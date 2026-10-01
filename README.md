@@ -21,7 +21,12 @@
 
 ## markitdown.exe 用法
 
-**圖形介面**：雙擊 `markitdown.exe`，加入檔案、資料夾或網址，選好輸出位置，再按「開始轉換」。右下方可以預覽結果，並一鍵複製 Markdown。
+**圖形介面**：雙擊 `markitdown.exe`，把檔案或資料夾拖進視窗（或按「加入檔案…」、貼上網址），再按右上角的「轉換 N 個項目」。
+
+- 左邊清單會直接顯示每個項目的狀態：✓ 已完成、✕ 失敗、⚠ 沒有文字。選取項目後，右邊會預覽 Markdown，可以「複製」、「開啟」或「開啟檔案位置」。
+- 轉換失敗時，預覽區會用白話說明原因和解決方法。轉換途中可以按「停止」。
+- 外觀跟著 Windows 的淺色／深色設定自動切換。
+- 常用快速鍵：`Ctrl+O` 加入檔案、`Ctrl+Shift+O` 加入資料夾、`Ctrl+L` 貼上網址、`Ctrl+Enter` 轉換、`Esc` 停止、`Ctrl+Shift+C` 複製 Markdown、`Delete` 移除。也可以在項目上按右鍵操作。
 
 **拖曳轉檔**：把檔案或資料夾拖到 `markitdown.exe` 圖示上，會在原檔旁產生同名的 `.md`。
 
@@ -40,6 +45,7 @@ markitdown.exe --help                            :: 全部選項
 > - 執行檔沒有數位簽章，第一次執行時 Windows SmartScreen 可能會阻擋。請按「其他資訊」再按「仍要執行」。
 > - 單一執行檔每次啟動都要先解壓縮，大約需要幾秒鐘。
 > - 掃描版 PDF（只有圖片、沒有文字層）轉不出文字，需要搭配 OCR 或 Azure Document Intelligence（`--docintel-endpoint`）。
+> - MarkItDown 用來判斷檔案類型的 ONNX Runtime 預設會傳送使用統計給 Microsoft。本工具預設關閉這項功能；如果想開啟，請設定環境變數 `ORT_DISABLE_TELEMETRY=0`。
 
 ## 安裝 Claude skill
 
@@ -83,6 +89,8 @@ python app/markitdown_app.py            # 圖形介面
 skills/markitdown/SKILL.md            Claude skill 說明（Claude 讀這個檔案）
 skills/markitdown/scripts/convert.py  轉換核心：CLI 與批次轉換（skill 和 exe 共用）
 app/markitdown_app.py                 exe 進入點：圖形介面 / 拖曳 / 命令列
+app/gui.py                            圖形介面（Windows 11 風格、淺色／深色）
+app/assets/                           App 圖示（由 packaging/make_icon.py 產生）
 packaging/markitdown.spec             PyInstaller 設定
 packaging/requirements-build.txt      建置用相依套件（固定版本）
 packaging/build_windows.bat           Windows 本機建置腳本

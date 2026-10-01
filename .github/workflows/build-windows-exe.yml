@@ -55,7 +55,9 @@ jobs:
         run: python tests/smoke_test.py --cmd dist/markitdown.exe
 
       - name: Smoke test the GUI
-        run: python tests/gui_smoke_test.py --exe dist/markitdown.exe --screenshots screenshots
+        run: |
+          python tests/gui_smoke_test.py --exe dist/markitdown.exe --screenshots screenshots
+          python tests/gui_smoke_test.py --appearance dark --screenshots screenshots
 
       - name: Package skill zips and checksums
         shell: pwsh

@@ -33,7 +33,12 @@ from urllib.parse import parse_qs, urlparse
 # pydub warns at import time when ffmpeg is missing; that only matters for audio.
 warnings.filterwarnings("ignore", message=".*ffmpeg.*", category=RuntimeWarning)
 
-TOOL_VERSION = "1.0.0"
+# ONNX Runtime (used by Magika for file-type detection) sends usage telemetry to
+# Microsoft by default. Converting local documents shouldn't, so opt out before
+# it loads. Set ORT_DISABLE_TELEMETRY=0 to allow it.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
+
+TOOL_VERSION = "1.1.0"
 
 # File types MarkItDown can convert. Used when scanning folders; explicit file
 # arguments are always attempted regardless of extension.
@@ -95,6 +100,7 @@ class Result:
     output: Optional[Path]
     markdown: Optional[str]
     error: Optional[str]
+    error_type: Optional[str] = None  # exception class name, for friendlier UI messages
 
     @property
     def ok(self) -> bool:
@@ -207,6 +213,14 @@ def build_converter(
     """Create the MarkItDown instance (slow: loads the Magika model)."""
     from markitdown import MarkItDown
 
+    if os.environ.get("ORT_DISABLE_TELEMETRY") == "1":
+        try:
+            import onnxruntime
+
+            onnxruntime.disable_telemetry_events()
+        except Exception:
+            pass
+
     kwargs = {"enable_plugins": use_plugins}
     if docintel_endpoint:
         kwargs["docintel_endpoint"] = docintel_endpoint
@@ -251,12 +265,22 @@ def convert_batch(
     keep_data_uris: bool = False,
     skip_existing: bool = False,
     on_result: Optional[Callable[[int, int, Result], None]] = None,
+    on_start: Optional[Callable[[int, int, Source], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> List[Result]:
-    """Convert every source to its own .md file. Shared by the CLI and the GUI."""
+    """Convert every source to its own .md file. Shared by the CLI and the GUI.
+
+    ``should_stop`` is checked between files, so a stop request finishes the
+    file in progress and leaves the rest unconverted.
+    """
     taken: Set[Path] = set()
     results: List[Result] = []
     total = len(sources)
     for index, source in enumerate(sources, start=1):
+        if should_stop and should_stop():
+            break
+        if on_start:
+            on_start(index, total, source)
         output = plan_output(source, out_dir, taken)
         if skip_existing and output.exists():
             result = Result(source, output, None, None)
@@ -267,7 +291,7 @@ def convert_batch(
                 output.write_text(markdown, encoding="utf-8")
                 result = Result(source, output, markdown, None)
             except Exception as exc:  # report and keep going with the rest of the batch
-                result = Result(source, None, None, describe_error(exc))
+                result = Result(source, None, None, describe_error(exc), type(exc).__name__)
         results.append(result)
         if on_result:
             on_result(index, total, result)
