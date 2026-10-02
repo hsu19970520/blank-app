@@ -1,0 +1,5 @@
+requests
+beautifulsoup4
+openpyxl
+# 選用：頁面需 JavaScript 渲染時（python scraper.py --browser）
+# playwright
