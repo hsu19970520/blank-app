@@ -4,3 +4,5 @@ pyinstaller==6.22.3
 # GUI: Windows 11 (Fluent) light/dark theme for Tk, and drag & drop into the window.
 sv-ttk==2.6.1
 tkinterdnd2==0.6.3
+# "Recalculate with Excel" drives the user's Microsoft Excel through COM (Windows only).
+pywin32==311; sys_platform == "win32"

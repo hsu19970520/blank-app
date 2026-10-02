@@ -37,7 +37,10 @@ Check it works with `RUN --version`.
 Excel options: `--xlsx-header-row "SHEET=ROW"` (override the detected header row;
 repeatable), `--xlsx-visible-only` (leave out hidden sheets / rows / columns, i.e. what
 Excel shows), `--xlsx-raw-values` (full-precision numbers instead of Excel's display
-format), `--xlsx-classic` (MarkItDown's original pandas converter).
+format), `--xlsx-formulas summary|cells|none` (how formulas are shown, see below),
+`--xlsx-recalc` (Windows with Microsoft Excel only: let Excel recalculate formulas and
+refresh pivot tables in a copy before converting; the CLI exits 2 with the reason when
+Excel isn't available), `--xlsx-classic` (MarkItDown's original pandas converter).
 
 Other options: `--skip-existing` (resume a batch), `--keep-data-uris` (keep base64
 images), `-c big5` (charset hint for legacy text/CSV files), `-x`/`-m` (extension /
@@ -78,8 +81,15 @@ Batch runs report each item as `(i/n) [OK] src -> dest.md`.
   parameters) are shown separately. Numbers appear exactly as Excel displays them
   (`12,345,678`, `(1,234)`, `206.92%`, ISO dates). Comments (`[註n]`), data validation,
   merged cells and pivot tables (fields, source, last refresh) are listed per sheet.
-  Formulas are not kept: values are the results cached at the last save, and pivot
-  tables are snapshots. Conditional formatting (red/yellow/green) is not rendered yet.
+  Values are the results Excel cached at the last save (pivot tables are snapshots),
+  unless `--xlsx-recalc` was used; the line under the title says which. Formulas: each
+  sheet ends with `#### 公式`, every distinct formula pattern with where it is used and
+  its first cell's formula (copies filled down/across count as one pattern), and the
+  overview has `### 工作表之間的資料流向`, which sheets each sheet's formulas and pivot
+  tables read. To explain how a number is produced, use those; for one exact cell use
+  `--xlsx-formulas cells`, which puts the formula under each value (`54,566,399<br>` +
+  `` `=XLOOKUP(...)` ``) but makes the output several times larger. Conditional
+  formatting (red/yellow/green) is not rendered yet.
   Big workbooks produce big Markdown: write to a file with `-o` and read it in parts.
 - **PowerPoint:** one section per slide, including tables, chart data, and speaker notes.
 - **Word:** headings, lists, tables, and links are preserved. Equations become LaTeX.

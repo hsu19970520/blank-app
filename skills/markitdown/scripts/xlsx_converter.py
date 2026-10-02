@@ -61,14 +61,24 @@ class XlsxOptions:
     header_rows: Dict[str, int] = field(default_factory=dict)  # sheet name -> header row (0 = none)
     visible_only: bool = False  # skip hidden sheets, rows and columns
     raw_values: bool = False  # full-precision numbers instead of Excel's display format
+    formulas: str = "summary"  # "none", "summary" (per-sheet pattern list) or "cells" (also under each value)
+    recalc_note: str = ""  # set when Excel recalculated the workbook before conversion
 
     @classmethod
     def from_kwargs(cls, base: "XlsxOptions", kwargs: Dict[str, Any]) -> "XlsxOptions":
+        formulas = kwargs.get("xlsx_formulas") or base.formulas
+        if formulas not in FORMULA_MODES:
+            raise ValueError(f"xlsx_formulas must be one of {', '.join(FORMULA_MODES)} (got {formulas!r})")
         return cls(
             header_rows=dict(kwargs.get("xlsx_header_rows") or base.header_rows),
             visible_only=bool(kwargs.get("xlsx_visible_only", base.visible_only)),
             raw_values=bool(kwargs.get("xlsx_raw_values", base.raw_values)),
+            formulas=formulas,
+            recalc_note=kwargs.get("xlsx_recalc_note") or base.recalc_note,
         )
+
+
+FORMULA_MODES = ("none", "summary", "cells")
 
 
 # --------------------------------------------------------------------------- #
@@ -325,12 +335,160 @@ def format_number(value: float, code: Optional[str], date1904: bool = False, raw
 
 
 # --------------------------------------------------------------------------- #
+# Formulas
+# --------------------------------------------------------------------------- #
+# Parts of a formula that must never be rewritten: "string literals",
+# 'quoted sheet names' and [structured / external references].
+_FORMULA_LITERAL = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|\[[^\]]*\]')
+_WORD = r"A-Za-z0-9_.\u00C0-\uFFFF"
+_A1_TOKEN = re.compile(
+    rf"(?<![{_WORD}$])(?:"
+    r"(\$?)([A-Z]{1,3})(\$?)(\d{1,7})"  # A1, $A$1
+    r"|(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})"  # whole columns  A:B
+    r"|(\$?)(\d{1,7}):(\$?)(\d{1,7})"  # whole rows     1:2
+    rf")(?![{_WORD}(])"
+)
+_SHEET_REF = re.compile(rf"'((?:[^']|'')+)'!|(?<![{_WORD}'\]])([A-Za-z_\u00C0-\uFFFF][{_WORD}]*)!")
+_FUTURE_PREFIX = re.compile(r"_xl(?:fn|ws|pm)\.")
+MAX_ROW, MAX_COL = 1_048_576, 16_384
+
+
+def _outside_literals(formula: str, transform) -> str:
+    out, pos = [], 0
+    for m in _FORMULA_LITERAL.finditer(formula):
+        out.append(transform(formula[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(transform(formula[pos:]))
+    return "".join(out)
+
+
+def shift_formula(formula: str, d_row: int, d_col: int) -> str:
+    """Move a formula by (d_row, d_col) the way Excel fills shared formulas:
+    relative references shift, $-anchored ones stay, off-sheet ones become #REF!."""
+
+    def shift(m: "re.Match") -> str:
+        g = m.groups()
+        if g[1] is not None:
+            col = col_index(g[1]) + (0 if g[0] else d_col)
+            row = int(g[3]) + (0 if g[2] else d_row)
+            if not (1 <= col <= MAX_COL and 1 <= row <= MAX_ROW):
+                return "#REF!"
+            return f"{g[0]}{col_letter(col)}{g[2]}{row}"
+        if g[5] is not None:
+            a = col_index(g[5]) + (0 if g[4] else d_col)
+            b = col_index(g[7]) + (0 if g[6] else d_col)
+            if not (1 <= a <= MAX_COL and 1 <= b <= MAX_COL):
+                return "#REF!"
+            return f"{g[4]}{col_letter(a)}:{g[6]}{col_letter(b)}"
+        a = int(g[9]) + (0 if g[8] else d_row)
+        b = int(g[11]) + (0 if g[10] else d_row)
+        if not (1 <= a <= MAX_ROW and 1 <= b <= MAX_ROW):
+            return "#REF!"
+        return f"{g[8]}{a}:{g[10]}{b}"
+
+    if d_row == 0 and d_col == 0:
+        return formula
+    return _outside_literals(formula, lambda code: _A1_TOKEN.sub(shift, code))
+
+
+def formula_pattern(formula: str, row: int, col: int) -> str:
+    """R1C1-style key: identical for every copy of a formula filled down or across."""
+
+    def rel(value: int, base: int, absolute: str, axis: str) -> str:
+        return f"{axis}{value}" if absolute else f"{axis}[{value - base}]"
+
+    def convert(m: "re.Match") -> str:
+        g = m.groups()
+        if g[1] is not None:
+            return rel(int(g[3]), row, g[2], "R") + rel(col_index(g[1]), col, g[0], "C")
+        if g[5] is not None:
+            return rel(col_index(g[5]), col, g[4], "C") + ":" + rel(col_index(g[7]), col, g[6], "C")
+        return rel(int(g[9]), row, g[8], "R") + ":" + rel(int(g[11]), row, g[10], "R")
+
+    return _outside_literals(formula, lambda code: _A1_TOKEN.sub(convert, code))
+
+
+def display_formula(formula: str, array: bool = False) -> str:
+    """'=XLOOKUP(...)' as Excel shows it (without the _xlfn. storage prefixes)."""
+    text = "=" + _FUTURE_PREFIX.sub("", formula)
+    return "{" + text + "}" if array else text
+
+
+def referenced_sheets(formula: str) -> set:
+    names = set()
+    for part in re.split(r'"(?:[^"]|"")*"', formula):  # ignore string literals
+        for m in _SHEET_REF.finditer(part):
+            names.add(m.group(1).replace("''", "'") if m.group(1) is not None else m.group(2))
+    return names
+
+
+@dataclass
+class FormulaPattern:
+    first_ref: Tuple[int, int]  # (row, col) of the first cell using it
+    example: str  # that cell's formula, as displayed
+    count: int = 0
+    cells: Dict[int, List[int]] = field(default_factory=dict)  # col -> rows
+
+
+def _row_runs(rows: List[int]) -> List[Tuple[int, int]]:
+    runs, start, prev = [], rows[0], rows[0]
+    for r in rows[1:]:
+        if r == prev + 1:
+            prev = r
+            continue
+        runs.append((start, prev))
+        start = prev = r
+    runs.append((start, prev))
+    return runs
+
+
+def describe_cells(cells: Dict[int, List[int]], limit: int = 4) -> str:
+    """Compact description of where a formula pattern is used.
+
+    Columns with identical row runs merge into rectangles; rectangles that repeat
+    at a fixed row interval (e.g. one row in every 6-row block) are summarised."""
+    runs = [(r1, r2, c) for c, rows in cells.items() for r1, r2 in _row_runs(sorted(rows))]
+    runs.sort()
+    rects: List[List[int]] = []
+    for r1, r2, c in runs:
+        last = rects[-1] if rects else None
+        if last and last[0] == r1 and last[1] == r2 and last[3] == c - 1:
+            last[3] = c
+        else:
+            rects.append([r1, r2, c, c])
+
+    def ref(r1: int, r2: int, c1: int, c2: int) -> str:
+        start = f"{col_letter(c1)}{r1}"
+        return start if (r1, c1) == (r2, c2) else f"{start}:{col_letter(c2)}{r2}"
+
+    # Group rectangles of the same shape and columns; spot a fixed repeat interval.
+    groups: Dict[Tuple[int, int, int], List[List[int]]] = {}
+    for rect in rects:
+        groups.setdefault((rect[2], rect[3], rect[1] - rect[0]), []).append(rect)
+    parts: List[Tuple[Tuple[int, int], str]] = []
+    for (c1, c2, height), members in groups.items():
+        starts = [m[0] for m in members]
+        steps = {b - a for a, b in zip(starts, starts[1:])}
+        if len(members) >= 3 and len(steps) == 1:
+            step = steps.pop()
+            first, last = members[0], members[-1]
+            parts.append(((c1, first[0]), f"{ref(*first[:2], c1, c2)} 起每 {step} 列一次，共 {len(members):,} 次（到第 {last[1]:,} 列）"))
+        else:
+            parts.extend(((c1, m[0]), ref(m[0], m[1], c1, c2)) for m in members)
+    parts.sort()
+    text = "、".join(p for _, p in parts[:limit])
+    return text + (f" 等 {len(parts):,} 處" if len(parts) > limit else "")
+
+
+# --------------------------------------------------------------------------- #
 # Workbook model
 # --------------------------------------------------------------------------- #
 @dataclass
 class Cell:
     text: str
-    kind: str  # "s" text, "n" number, "d" date, "b" bool, "e" error
+    kind: str  # "s" text, "n" number, "d" date, "b" bool, "e" error, "f" formula without a cached value
+    formula: Optional[str] = None  # displayed formula, kept only with formulas="cells"
 
 
 @dataclass
@@ -364,6 +522,10 @@ class Sheet:
     pivots: List[Pivot] = field(default_factory=list)
     tables: List[Tuple[str, Tuple[int, int, int, int], int]] = field(default_factory=list)
     dimension: str = ""
+    formula_count: int = 0
+    formula_patterns: Dict[str, FormulaPattern] = field(default_factory=dict)
+    shared_formulas: Dict[str, Tuple[str, int, int, str]] = field(default_factory=dict)  # si -> master
+    references: Dict[str, int] = field(default_factory=dict)  # other sheet -> formula cells reading it
 
 
 class WorkbookReader:
@@ -462,6 +624,11 @@ class WorkbookReader:
                 # Lists sourced from another sheet are stored in the x14 extension.
                 sheet.validations.append(self._describe_validation(el))
         self._read_sheet_parts(sheet)
+        for pattern in sheet.formula_patterns.values():
+            for name in referenced_sheets(pattern.example):
+                if name != sheet.name:
+                    sheet.references[name] = sheet.references.get(name, 0) + pattern.count
+        sheet.shared_formulas.clear()
 
     def _read_row(self, sheet: Sheet, row, raw: bool) -> None:
         r = int(row.get("r", "0")) or (max(sheet.cells) + 1 if sheet.cells else 1)
@@ -474,10 +641,48 @@ class WorkbookReader:
             col = col_index(_REF.fullmatch(ref).group(1)) if ref else next_col
             next_col = col + 1
             cell = self._cell_value(c, raw)
+            f = c.find(NS + "f")
+            if f is not None and self.options.formulas != "none":
+                formula = self._read_formula(sheet, f, r, col)
+                if formula and self.options.formulas == "cells":
+                    if cell is None:
+                        cell = Cell("", "f")
+                    cell.formula = formula
             if cell is not None:
                 cells[col] = cell
         if cells:
             sheet.cells[r] = cells
+
+    def _read_formula(self, sheet: Sheet, f, r: int, col: int) -> Optional[str]:
+        """Record the cell's formula pattern; return the displayed formula when per-cell output needs it."""
+        kind = f.get("t", "normal")
+        text = f.text or ""
+        if kind == "dataTable":
+            return None
+        if kind == "shared":
+            si = f.get("si", "")
+            if text:  # the master cell carries the formula for the whole block
+                key = formula_pattern(text, r, col)
+                sheet.shared_formulas[si] = (text, r, col, key)
+            else:
+                master = sheet.shared_formulas.get(si)
+                if master is None:
+                    return None
+                m_text, m_row, m_col, key = master
+                text = shift_formula(m_text, r - m_row, col - m_col) if self.options.formulas == "cells" else ""
+        elif text:
+            key = formula_pattern(text, r, col)
+        else:
+            return None
+        sheet.formula_count += 1
+        pattern = sheet.formula_patterns.get(key)
+        displayed = display_formula(text, kind == "array") if text else None
+        if pattern is None:
+            pattern = FormulaPattern((r, col), displayed or "")
+            sheet.formula_patterns[key] = pattern
+        pattern.count += 1
+        pattern.cells.setdefault(col, []).append(r)
+        return displayed
 
     def _cell_value(self, c, raw: bool) -> Optional[Cell]:
         t = c.get("t", "n")
@@ -654,6 +859,14 @@ def _escape(text: str) -> str:
     return text.replace("|", "\\|").replace("\r\n", "\n").replace("\n", "<br>").strip()
 
 
+def _code(formula: str) -> str:
+    """A formula as inline code inside a table cell."""
+    body = formula.replace("|", "\\|").replace("\n", " ")
+    fence = "``" if "`" in body else "`"
+    pad = " " if fence == "``" else ""
+    return f"{fence}{pad}{body}{pad}{fence}"
+
+
 def _looks_like_header(cells: Dict[int, Cell]) -> bool:
     texts = sum(1 for c in cells.values() if c.kind == "s")
     return texts >= 2 and texts >= 0.5 * len(cells)
@@ -776,6 +989,9 @@ class SheetRenderer:
                 name = f"{name} #{seen[name]}"
             else:
                 seen[name] = 1
+            own = rows.get(header_row, {}).get(c) if header_row else None
+            if own is not None and own.formula:  # e.g. a date header computed with EOMONTH
+                name = f"{name}<br>{_code(own.formula)}"
             names.append(name)
         return names
 
@@ -786,6 +1002,8 @@ class SheetRenderer:
             for c in columns:
                 cell = rows.get(r, {}).get(c)
                 text = _escape(cell.text) if cell else ""
+                if cell is not None and cell.formula:
+                    text = f"{text}<br>{_code(cell.formula)}" if text else _code(cell.formula)
                 note = self.notes.get((r, c))
                 if note:
                     text = f"{text} [註{note}]".strip()
@@ -956,7 +1174,26 @@ class SheetRenderer:
         if sheet.merged:
             shown = "、".join(sheet.merged[:40]) + (f" …（共 {len(sheet.merged)} 個）" if len(sheet.merged) > 40 else "")
             blocks.append(f"#### 合併儲存格\n\n{shown}（表格中只在左上角儲存格顯示內容）")
+        if sheet.formula_patterns:
+            blocks.append(self._formula_section())
         return "\n\n".join(blocks)
+
+    def _formula_section(self) -> str:
+        sheet = self.sheet
+        patterns = sorted(sheet.formula_patterns.values(), key=lambda p: (p.first_ref[1], p.first_ref[0]))
+        lines = [
+            f"#### 公式（共 {sheet.formula_count:,} 個，{len(patterns):,} 種寫法）",
+            "",
+            "往下或往右複製的同一條公式算一種寫法；「公式」是該寫法第一格的內容，其他格的參照依相對位置移動。",
+            "",
+            "| 範圍 | 格數 | 公式（第一格） |",
+            "|---|---|---|",
+        ]
+        for p in patterns:
+            first = f"{col_letter(p.first_ref[1])}{p.first_ref[0]}"
+            where = describe_cells(p.cells)
+            lines.append(f"| {_escape(where)} | {p.count:,} | {first}：{_code(p.example)} |")
+        return "\n".join(lines)
 
 
 def render_workbook(archive: zipfile.ZipFile, options: XlsxOptions, title: str = "") -> str:
@@ -967,7 +1204,7 @@ def render_workbook(archive: zipfile.ZipFile, options: XlsxOptions, title: str =
     if options.visible_only:
         hidden = []
 
-    sections, overview = [], []
+    sections, overview, loaded = [], [], []
     for group, sheet_list in (("visible", visible), ("hidden", hidden)):
         if group == "hidden" and sheet_list:
             sections.append("# 隱藏的工作表\n\n以下工作表在 Excel 中是隱藏的。")
@@ -977,19 +1214,62 @@ def render_workbook(archive: zipfile.ZipFile, options: XlsxOptions, title: str =
             state = {"visible": "顯示", "hidden": "隱藏", "veryHidden": "深度隱藏"}.get(sheet.state, sheet.state)
             suffix = "" if sheet.state == "visible" else f"（{state}工作表）"
             sections.append(f"## {sheet.name}{suffix}\n\n{body}".rstrip())
+            formula_desc = (f"{sheet.formula_count:,}（{len(sheet.formula_patterns):,} 種）"
+                            if sheet.formula_count else "")
             overview.append(
                 f"| {_escape(sheet.name)} | {state} | {sheet.dimension or '-'} | {header_desc or '-'} | "
-                f"{len(sheet.pivots) or ''} | {sum(len(v) for v in sheet.comments.values()) or ''} |"
+                f"{formula_desc} | {len(sheet.pivots) or ''} | {sum(len(v) for v in sheet.comments.values()) or ''} |"
             )
+            loaded.append(sheet)
             sheet.cells.clear()  # free memory before the next sheet
+            for pattern in sheet.formula_patterns.values():
+                pattern.cells.clear()  # positions were only needed for this sheet's section
 
     head = [f"# {title}" if title else "# Excel 活頁簿"]
+    if options.recalc_note:
+        values = f"數值：{options.recalc_note}。"
+    else:
+        values = "數值是 Excel 上次存檔時算好的結果（轉換時沒有重新計算，樞紐分析表也是上次重新整理的內容）。"
+    formulas = {
+        "none": "",
+        "summary": "每張工作表最後的「公式」段落列出所有公式的寫法與範圍。",
+        "cells": "公式附在每個儲存格的值下方（`=…`），每張工作表最後也有公式寫法的整理。",
+    }[options.formulas]
     head.append(
-        "> 數值依 Excel 儲存格格式顯示（raw 模式則為完整精度）；公式只保留上次存檔時計算的結果。"
+        f"> {values}{formulas}數字依 Excel 儲存格格式顯示（raw 模式則為完整精度）。"
         "欄名後的括號是 Excel 欄字母，「列」是 Excel 列號；「(隱)」/「·隱」表示 Excel 中被隱藏的列或欄。"
     )
-    head.append("| 工作表 | 狀態 | 範圍 | 表頭 | 樞紐分析表 | 註解 |\n|---|---|---|---|---|---|\n" + "\n".join(overview))
+    head.append("| 工作表 | 狀態 | 範圍 | 表頭 | 公式 | 樞紐分析表 | 註解 |\n|---|---|---|---|---|---|---|\n" + "\n".join(overview))
+    dependencies = _dependency_table(loaded)
+    if dependencies:
+        head.append(dependencies)
     return "\n\n".join(head + sections)
+
+
+def _dependency_table(sheets: List[Sheet]) -> str:
+    """Which sheets each sheet's formulas and pivot tables read from."""
+    rows = []
+    for sheet in sheets:
+        reads = sorted(sheet.references.items(), key=lambda kv: -kv[1])
+        formula_text = "、".join(f"{_escape(name)}（{count:,} 格）" for name, count in reads)
+        sources: Dict[str, List[str]] = {}
+        for pivot in sheet.pivots:
+            name = pivot.source.split("!")[0].strip("'").replace("''", "'") if "!" in pivot.source else pivot.source
+            if name:
+                sources.setdefault(name, []).append(pivot.name)
+        pivot_text = "、".join(
+            f"{_escape(name)}（{len(names)} 個樞紐分析表）" if len(names) > 1 else f"{_escape(name)}（{_escape(names[0])}）"
+            for name, names in sources.items()
+        )
+        if formula_text or pivot_text:
+            rows.append(f"| {_escape(sheet.name)} | {formula_text or '-'} | {pivot_text or '-'} |")
+    if not rows:
+        return ""
+    return (
+        "### 工作表之間的資料流向\n\n"
+        "改了右邊兩欄列出的工作表，左邊的工作表就會跟著變（公式在 Excel 存檔時重算；樞紐分析表要按「重新整理」）。\n\n"
+        "| 工作表 | 公式讀取的工作表 | 樞紐分析表的資料來源 |\n|---|---|---|\n" + "\n".join(rows)
+    )
 
 
 class XlsxConverter(DocumentConverter):

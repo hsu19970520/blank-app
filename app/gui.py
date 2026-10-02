@@ -137,6 +137,9 @@ def friendly_error(error_type: Optional[str]) -> tuple:
     network = {"ConnectionError", "Timeout", "ConnectTimeout", "ReadTimeout", "HTTPError", "SSLError", "TooManyRedirects"}
     if error_type == "FileNotFoundError":
         return "找不到這個檔案", "檔案可能已被移動、重新命名或刪除。請確認位置後重新加入。"
+    if error_type == "RecalcError":
+        return ("無法用 Excel 重新計算",
+                "請確認 Excel 能正常開啟這個檔案（沒有密碼、沒有損毀）。也可以在「選項」取消重新計算，改用檔案中上次存檔的數值。")
     if error_type == "PermissionError":
         return "無法儲存 .md 檔", "請關閉正在使用這個檔案的程式，或在「儲存到」改選其他資料夾。"
     if error_type == "UnsupportedFormatException":
@@ -233,6 +236,8 @@ class ConverterWindow:
         self.skip_existing = tk.BooleanVar(value=False)
         self.keep_data_uris = tk.BooleanVar(value=False)
         self.xlsx_visible_only = tk.BooleanVar(value=False)
+        self.xlsx_formulas_in_cells = tk.BooleanVar(value=False)
+        self.xlsx_recalc = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar()
         self.url_text = tk.StringVar()
 
@@ -467,6 +472,15 @@ class ConverterWindow:
         options_menu.add_checkbutton(label="略過已經有 .md 的檔案", variable=self.skip_existing)
         options_menu.add_checkbutton(label="在 Markdown 中保留內嵌圖片（base64）", variable=self.keep_data_uris)
         options_menu.add_checkbutton(label="Excel：只輸出看得到的工作表、列和欄", variable=self.xlsx_visible_only)
+        options_menu.add_checkbutton(label="Excel：在每個儲存格的值下方附上公式", variable=self.xlsx_formulas_in_cells)
+        from excel_recalc import excel_status
+
+        excel_ok, _reason = excel_status()
+        options_menu.add_checkbutton(
+            label="Excel：轉換前先用 Excel 重新計算（含樞紐分析表）" if excel_ok
+            else "Excel：轉換前先用 Excel 重新計算（需要 Microsoft Excel）",
+            variable=self.xlsx_recalc, state="normal" if excel_ok else "disabled",
+        )
         self.options_button["menu"] = options_menu
 
         # Content: the list of documents and the Markdown preview, side by side.
@@ -858,8 +872,12 @@ class ConverterWindow:
         self.progress.configure(mode="determinate", maximum=len(targets), value=0)
         self.progress.grid()
         self._refresh()
-        jobs = (targets, out_dir, self.skip_existing.get(), self.keep_data_uris.get(),
-                {"xlsx_visible_only": self.xlsx_visible_only.get()})
+        options = {
+            "xlsx_visible_only": self.xlsx_visible_only.get(),
+            "xlsx_formulas": "cells" if self.xlsx_formulas_in_cells.get() else "summary",
+            "xlsx_recalc": self.xlsx_recalc.get(),
+        }
+        jobs = (targets, out_dir, self.skip_existing.get(), self.keep_data_uris.get(), options)
         threading.Thread(target=self._worker, args=jobs, daemon=True).start()
 
     def reconvert_selected(self) -> None:
@@ -893,6 +911,7 @@ class ConverterWindow:
                     on_result=lambda n, _t, r, ids=iids: self.events.put(("result", ids[n - 1], r)),
                     should_stop=self.stop_event.is_set,
                     options=options,
+                    progress=lambda message: self.events.put(("status", message)),
                 )
         except Exception as exc:
             self.events.put(("log", f"錯誤：{convert.describe_error(exc)}"))
@@ -915,6 +934,9 @@ class ConverterWindow:
         elif kind == "engine_failed":
             self._log(f"無法啟動轉換引擎：{event[1]}")
             self._set_status("無法啟動轉換引擎，詳細資訊請見「檢視 › 轉換紀錄」")
+        elif kind == "status":  # e.g. Excel recalculation steps
+            self._set_status(event[1])
+            self._log(event[1])
         elif kind == "waiting_engine":
             self.progress.configure(mode="indeterminate")
             self.progress.start(12)

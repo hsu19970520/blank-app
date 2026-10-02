@@ -55,6 +55,19 @@ X14_VALIDATION = (
 )
 
 
+def share_formulas(xml: str) -> str:
+    """Turn Calc!B2 and C2 into shared formulas over rows 2-4, as Excel stores fills."""
+    import re
+
+    for col, si in (("B", 0), ("C", 1)):
+        xml = re.sub(rf'(<c r="{col}2"[^>]*>)<f>(.*?)</f>(<v>\s*</v>|<v/>)?',
+                     lambda m: f'{m.group(1)}<f t="shared" ref="{col}2:{col}4" si="{si}">{m.group(2)}</f>'
+                               + ("<v>10</v>" if col == "B" else ""), xml)
+        for r in (3, 4):
+            xml = re.sub(rf'(<c r="{col}{r}"[^>]*>)', rf'\1<f t="shared" si="{si}"/>', xml)
+    return xml
+
+
 def build_workbook(path: Path) -> None:
     from openpyxl import Workbook
     from openpyxl.comments import Comment
@@ -123,6 +136,24 @@ def build_workbook(path: Path) -> None:
     pivot["A5"], pivot["B5"] = "ACME", 5
     pivot["A6"], pivot["B6"] = "總計", 15
 
+    # Formulas: a shared block (as Excel saves a filled-down column), a lookup with
+    # Excel's _xlfn. storage prefix, an array formula and a formula in the header row.
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    calc = wb.create_sheet("Calc")
+    for col, name in enumerate(["N", "Times", "Label", "Factor", "Lookup", "Array"], start=1):
+        calc.cell(1, col, name)
+    calc["G1"] = '=UPPER("total")'
+    for r, n in ((2, 1), (3, 2), (4, 3)):
+        calc.cell(r, 1, n)
+    calc["D2"] = 10
+    calc["B2"] = "=A2*$D$2"
+    calc["B3"], calc["B4"] = 20, 30  # cached results of the shared copies
+    calc["C2"] = "=IF(A2>1,\"A1 B2\",'Report'!C15)"
+    calc["C3"], calc["C4"] = "A1 B2", "A1 B2"
+    calc["E2"] = "=_xlfn.XLOOKUP(A2,A2:A4,A2:A4)"
+    calc["F2"] = ArrayFormula("F2", "=SUM(A2:A4*2)")
+
     hidden = wb.create_sheet("工作表2")
     hidden["A1"], hidden["B1"] = "Key", "Value"
     hidden["A2"], hidden["B2"] = "secret", 1
@@ -134,11 +165,14 @@ def build_workbook(path: Path) -> None:
     # x14 validation to "Merged".
     pivot_index = wb.sheetnames.index("Pivot") + 1
     merged_name = f"xl/worksheets/sheet{wb.sheetnames.index('Merged') + 1}.xml"
+    calc_name = f"xl/worksheets/sheet{wb.sheetnames.index('Calc') + 1}.xml"
     tmp = path.with_suffix(".tmp")
     with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
         rels_name = f"xl/worksheets/_rels/sheet{pivot_index}.xml.rels"
         for item in src.infolist():
-            if item.filename == merged_name:
+            if item.filename == calc_name:
+                dst.writestr(item, share_formulas(src.read(item.filename).decode("utf-8")))
+            elif item.filename == merged_name:
                 xml = src.read(item.filename).decode("utf-8")
                 dst.writestr(item, xml.replace("</worksheet>", X14_VALIDATION + "</worksheet>"))
             elif item.filename != rels_name:
@@ -220,6 +254,21 @@ def main() -> int:
         check("freeze panes", "凍結窗格：前 14 列、前 1 欄" in dns)
         merged = section(md, "Merged")
         check("merged header cell fills the column name", "Date (B)" in merged and "B1:B2" in merged, merged)
+        # Formulas: pattern summary (default), per-cell, none; data flow between sheets.
+        calc = section(md, "Calc")
+        check("formula section with counts", "#### 公式（共 9 個，5 種寫法）" in calc, calc[-1500:])
+        check("shared block summarised as one pattern", "| B2:B4 | 3 | B2：`=A2*$D$2` |" in calc, calc[-1500:])
+        check("string literal and quoted sheet kept in pattern", "| C2:C4 | 3 | C2：`=IF(A2>1,\"A1 B2\",'Report'!C15)` |" in calc)
+        check("_xlfn. prefix hidden", "`=XLOOKUP(A2,A2:A4,A2:A4)`" in calc and "_xlfn" not in md)
+        check("array formula in braces", "`{=SUM(A2:A4*2)}`" in calc)
+        check("overview counts formulas", "| Calc | 顯示 |" in md and "| 9（5 種） |" in md, md[:1500])
+        check("data-flow table names the source sheet", "| Calc | Report（3 格） | - |" in md, md[:2500])
+        cells = section(run("--xlsx-formulas", "cells"), "Calc")
+        check("per cell: master keeps value and formula", "| 2 | 1 | 10<br>`=A2*$D$2` |" in cells, cells[:1500])
+        check("per cell: shared copy shifted, $ anchor kept", "20<br>`=A3*$D$2`" in cells and "30<br>`=A4*$D$2`" in cells)
+        check("per cell: literal untouched, quoted sheet ref shifted", "`=IF(A4>1,\"A1 B2\",'Report'!C17)`" in cells, cells[:1500])
+        check("per cell: header formula in the column name", "G<br>`=UPPER(\"total\")`" in cells, cells[:600])
+        check("no formulas when turned off", "#### 公式" not in run("--xlsx-formulas", "none"))
         check("x14 data validation (list from another sheet)",
               "A3:A10、C3:C5、D3:D5、E3:E5 等 5 段：清單，選項來自 Report!$F$15:$F$17" in merged, merged)
         pivot = section(md, "Pivot")

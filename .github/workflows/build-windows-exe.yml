@@ -49,6 +49,7 @@ jobs:
         run: |
           python tests/smoke_test.py
           python tests/xlsx_test.py
+          python tests/recalc_test.py
 
       - name: Build markitdown.exe
         run: pyinstaller --noconfirm --clean packaging/markitdown.spec
@@ -57,6 +58,7 @@ jobs:
         run: |
           python tests/smoke_test.py --cmd dist/markitdown.exe
           python tests/xlsx_test.py --cmd dist/markitdown.exe
+          python tests/recalc_test.py --cmd dist/markitdown.exe
 
       - name: Smoke test the GUI
         run: |

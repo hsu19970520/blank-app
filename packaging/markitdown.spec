@@ -5,6 +5,7 @@
 #
 # Output: dist/markitdown.exe (dist/markitdown on Linux/macOS).
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
@@ -25,7 +26,9 @@ datas += [(os.path.join(ROOT, "app", "assets"), "assets")]
 hiddenimports = []
 # Converters are imported dynamically inside try/except blocks.
 hiddenimports += collect_submodules("markitdown")
-hiddenimports += ["convert", "xlsx_converter", "gui", "sv_ttk"]
+hiddenimports += ["convert", "xlsx_converter", "excel_recalc", "gui", "sv_ttk"]
+if sys.platform == "win32":  # Excel automation for --xlsx-recalc
+    hiddenimports += ["win32com", "win32com.client", "pythoncom", "pywintypes"]
 
 a = Analysis(
     [os.path.join(ROOT, "app", "markitdown_app.py")],

@@ -23,6 +23,7 @@ import codecs
 import io
 import os
 import re
+import shutil
 import sys
 import warnings
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ warnings.filterwarnings("ignore", message=".*ffmpeg.*", category=RuntimeWarning)
 # it loads. Set ORT_DISABLE_TELEMETRY=0 to allow it.
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
-TOOL_VERSION = "1.2.1"
+TOOL_VERSION = "1.3.0"
 
 # File types MarkItDown can convert. Used when scanning folders; explicit file
 # arguments are always attempted regardless of extension.
@@ -252,8 +253,27 @@ def make_stream_info(extension: Optional[str], mime_type: Optional[str], charset
     return StreamInfo(extension=extension or None, mimetype=mime_type or None, charset=charset or None)
 
 
-def convert_source(converter, source: Source, stream_info=None, keep_data_uris: bool = False, **options) -> str:
-    """``options`` are passed through to the converters (e.g. xlsx_visible_only)."""
+def convert_source(
+    converter, source: Source, stream_info=None, keep_data_uris: bool = False,
+    progress: Optional[Callable[[str], None]] = None, **options,
+) -> str:
+    """``options`` are passed through to the converters (e.g. xlsx_visible_only).
+
+    With ``xlsx_recalc``, an .xlsx/.xlsm file is first recalculated by Microsoft
+    Excel (formulas and pivot tables) in a temporary copy, and the copy is converted."""
+    recalc = options.pop("xlsx_recalc", False)
+    if recalc and not (source.is_stdin or source.is_url) and Path(source.value).suffix.lower() in (".xlsx", ".xlsm"):
+        from excel_recalc import recalculate
+
+        recalculated = recalculate(source.value, progress=progress)
+        try:
+            options["xlsx_recalc_note"] = recalculated.note()
+            result = converter.convert(
+                str(recalculated.path), stream_info=stream_info, keep_data_uris=keep_data_uris, **options
+            )
+        finally:
+            shutil.rmtree(recalculated.workdir, ignore_errors=True)
+        return result.markdown or ""
     if source.is_stdin:
         data = io.BytesIO(sys.stdin.buffer.read())
         result = converter.convert_stream(data, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
@@ -263,6 +283,8 @@ def convert_source(converter, source: Source, stream_info=None, keep_data_uris: 
 
 
 def describe_error(exc: BaseException) -> str:
+    if exc.__class__.__name__ == "RecalcError":  # already a sentence for the user
+        return str(exc)
     message = str(exc).strip() or exc.__class__.__name__
     # MarkItDown error messages can be very long tracebacks; keep the gist.
     first_lines = "\n".join(message.splitlines()[:6])
@@ -280,6 +302,7 @@ def convert_batch(
     on_start: Optional[Callable[[int, int, Source], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
     options: Optional[dict] = None,
+    progress: Optional[Callable[[str], None]] = None,
 ) -> List[Result]:
     """Convert every source to its own .md file. Shared by the CLI and the GUI.
 
@@ -299,7 +322,7 @@ def convert_batch(
             result = Result(source, output, None, None)
         else:
             try:
-                markdown = convert_source(converter, source, stream_info, keep_data_uris, **(options or {}))
+                markdown = convert_source(converter, source, stream_info, keep_data_uris, progress, **(options or {}))
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_text(markdown, encoding="utf-8")
                 result = Result(source, output, markdown, None)
@@ -357,6 +380,12 @@ def build_parser(prog: str = "markitdown") -> argparse.ArgumentParser:
                        help="leave out hidden sheets, rows and columns (as seen in Excel)")
     excel.add_argument("--xlsx-raw-values", action="store_true",
                        help="full-precision numbers instead of Excel's display format")
+    excel.add_argument("--xlsx-formulas", choices=["none", "summary", "cells"], default="summary",
+                       help="formulas: 'summary' lists every formula pattern per sheet (default), "
+                            "'cells' also writes each cell's formula under its value, 'none' leaves them out")
+    excel.add_argument("--xlsx-recalc", action="store_true",
+                       help="recalculate with Microsoft Excel first (Windows + Excel): refreshes pivot tables "
+                            "and formulas in a copy, then converts it; the original file is not changed")
     excel.add_argument("--xlsx-classic", action="store_true",
                        help="use MarkItDown's original pandas-based Excel converter")
     parser.add_argument(
@@ -424,9 +453,27 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         if not sep or not sheet or not row.strip().isdigit():
             parser.error(f'--xlsx-header-row expects SHEET=ROW, e.g. "Report=14" (got {spec!r})')
         header_rows[sheet.strip()] = int(row)
-    options = {"xlsx_visible_only": args.xlsx_visible_only, "xlsx_raw_values": args.xlsx_raw_values}
+    options = {
+        "xlsx_visible_only": args.xlsx_visible_only,
+        "xlsx_raw_values": args.xlsx_raw_values,
+        "xlsx_formulas": args.xlsx_formulas,
+        "xlsx_recalc": args.xlsx_recalc,
+    }
     if header_rows:
         options["xlsx_header_rows"] = header_rows
+
+    if args.xlsx_recalc and any(
+        not (s.is_stdin or s.is_url) and Path(s.value).suffix.lower() in (".xlsx", ".xlsm") for s in sources
+    ):
+        from excel_recalc import excel_status
+
+        available, reason = excel_status()
+        if not available:
+            print(f"--xlsx-recalc：{reason}。拿掉這個選項就會用檔案中上次存檔的數值轉換。", file=sys.stderr)
+            return 2
+
+    def progress(message: str) -> None:
+        print(f"  … {message}", file=sys.stderr, flush=True)
 
     converter = build_converter(args.use_plugins, args.docintel_endpoint, classic_xlsx=args.xlsx_classic)
 
@@ -437,7 +484,7 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         failures = 0
         for source in sources:
             try:
-                markdown = convert_source(converter, source, stream_info, args.keep_data_uris, **options)
+                markdown = convert_source(converter, source, stream_info, args.keep_data_uris, progress, **options)
             except Exception as exc:
                 failures += 1
                 print(f"[FAIL] {source.value}: {describe_error(exc)}", file=sys.stderr)
@@ -450,7 +497,7 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
     if args.output:
         source = sources[0]
         try:
-            markdown = convert_source(converter, source, stream_info, args.keep_data_uris, **options)
+            markdown = convert_source(converter, source, stream_info, args.keep_data_uris, progress, **options)
         except Exception as exc:
             print(f"[FAIL] {source.value}: {describe_error(exc)}", file=sys.stderr)
             return 1
@@ -482,6 +529,7 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         skip_existing=args.skip_existing,
         on_result=report,
         options=options,
+        progress=progress,
     )
     failed = sum(1 for r in results if not r.ok)
     print(f"Done: {len(results) - failed} succeeded, {failed} failed.")
