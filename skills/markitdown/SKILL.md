@@ -34,10 +34,14 @@ Check it works with `RUN --version`.
 | Bytes from stdin | `RUN -x pdf < file.bin` |
 | Print a whole batch to stdout | `RUN a.pdf b.pdf --stdout` |
 
-Excel options: `--xlsx-header-row "SHEET=ROW"` (override the detected header row;
-repeatable), `--xlsx-visible-only` (leave out hidden sheets / rows / columns, i.e. what
-Excel shows), `--xlsx-raw-values` (full-precision numbers instead of Excel's display
-format), `--xlsx-formulas summary|cells|none` (how formulas are shown, see below),
+Excel options: `--xlsx-format compact|readable` (default `compact`, the token-saving
+package described in section 4), `--xlsx-rows-containing TEXT` (compact: keep only rows
+containing TEXT, case-insensitive, repeatable), `--xlsx-part-tokens N` (compact: split
+into files of about N tokens), `--xlsx-header-row "SHEET=ROW"` (override the detected
+header row; repeatable), `--xlsx-visible-only` (leave out hidden sheets / rows / columns,
+i.e. what Excel shows), `--xlsx-raw-values` (readable: full-precision numbers instead of
+Excel's display format), `--xlsx-formulas summary|cells|none` (how formulas are shown,
+see below; `cells` implies `readable`),
 `--xlsx-recalc` (Windows with Microsoft Excel only: let Excel recalculate formulas and
 refresh pivot tables in a copy before converting; the CLI exits 2 with the reason when
 Excel isn't available), `--xlsx-classic` (MarkItDown's original pandas converter).
@@ -57,6 +61,10 @@ Batch runs report each item as `(i/n) [OK] src -> dest.md`.
 - **Reading for the user:** for a single document, convert to stdout and work from
   that. For anything large (long PDFs, big spreadsheets) write to a file with `-o`
   first, then read it in parts. Don't pull a huge document into context at once.
+- **Excel:** convert with `--out-dir <folder>` (a big workbook becomes several files),
+  read `00_索引與邏輯.md` first, then only the data files the question needs. When the
+  question is about specific items (part numbers, customers), re-run with
+  `--xlsx-rows-containing ITEM` (repeatable) so the data holds only those rows.
 - **Converting for the user:** write the `.md` files where the user asked; by default
   a batch goes next to the originals. When asked to convert a folder, use
   `--out-dir` so the source folder stays clean, and add `-r` for sub-folders.
@@ -71,7 +79,31 @@ Batch runs report each item as `(i/n) [OK] src -> dest.md`.
 
 - **PDF:** text layer only. A scanned PDF with no text layer yields little or no
   output. Say so, and suggest OCR or `--docintel-endpoint`.
-- **Excel (.xlsx/.xlsm):** a workbook overview table first (sheet, visible/hidden, range,
+- **Excel (.xlsx/.xlsm), default `compact` package:** small workbooks give one `.md`
+  file; workbooks over about 150k tokens give a folder `<name>_md/` holding
+  `00_索引與邏輯.md` (the index) and one file per sheet, split into `_第N部分` parts when
+  large. How to use it:
+  - **Read the index first.** Per sheet it lists every column (Excel letter, name, type,
+    non-empty count) with **exact statistics computed by the converter**: min, max and
+    total, split by the row-category column when the sheet has one (e.g. Demand / ETD /
+    Balance rows, whose values must not be added together). Quote these numbers instead
+    of adding up data yourself. It also gives each column's formula, the most used
+    formulas, the data flow between sheets, filters, hidden rows/columns, validation,
+    pivot tables, and the estimated tokens of each data file. Adjacent columns built by
+    the same formula (e.g. 76 week columns) share one line.
+  - **Then read only the data you need.** Data is a ```` ```tsv ```` block: the first line
+    is `列` plus Excel column letters, each following line starts with the Excel row
+    number (`17h` = row hidden in Excel, usually filtered out), then the cells in
+    column order (empty = blank cell; trailing blanks omitted). Values are exact: full
+    precision without thousands separators, percentages as fractions (0.25 = 25%), dates
+    as `YYYY-MM-DD` or `YYYY-MM-DD hh:mm:ss[.fff]` even when the cell's format shows less.
+    `\t`, `\n`, `\\` stand for a tab, line break and backslash inside a cell. Cell
+    `C15` is column `C` of the line starting `15`. Comments follow the sheet's data.
+  - In a chat where the user uploaded only some of the files, say which file you need
+    (the index lists them all) rather than guessing.
+  - Before writing, the converter reads every value back and compares it with the
+    workbook; a package is never produced with a wrong cell.
+- **Excel, `--xlsx-format readable`:** a workbook overview table first (sheet, visible/hidden, range,
   where the header came from), then one `## SheetName` section per sheet; hidden sheets
   are grouped at the end under `# 隱藏的工作表`. In each table the first column `列` is the
   Excel row number and every column name ends with its Excel letter, e.g. `MPN (A)`, so

@@ -183,11 +183,14 @@ def main() -> int:
         excel_recalc.recalculate = lambda path, progress=None, **kw: real(path, dispatch=lambda _: FakeExcel([]), progress=progress)
         try:
             converter = convert.build_converter()
-            md = convert.convert_source(converter, convert.Source(str(book)), xlsx_recalc=True)
+            md = convert.convert_source(converter, convert.Source(str(book)), xlsx_recalc=True, xlsx_format="readable")
+            compact = convert.convert_source(converter, convert.Source(str(book)), xlsx_recalc=True)
         finally:
             excel_recalc.recalculate = real
         check("Markdown uses the recalculated value", "| 2 | A | 999 |" in md, md[-600:])
         check("Markdown says it was recalculated", "已用 Microsoft Excel 16.0 在轉換前重新計算" in md, md[:600])
+        check("compact package uses the recalculated value", "\n2\tA\t999" in compact, compact[-600:])
+        check("compact package says it was recalculated", "已用 Microsoft Excel 16.0 在轉換前重新計算" in compact, compact[:600])
         check("original still untouched after conversion", digest(book) == before)
         leftovers = [p for p in Path(tempfile.gettempdir()).glob("markitdown-recalc-*") if p != excel_recalc_workdir]
         check("conversion removes its temporary copy", not leftovers, str(leftovers))

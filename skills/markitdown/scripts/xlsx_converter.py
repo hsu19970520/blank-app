@@ -216,6 +216,33 @@ def _date_text(value: float, code: str, date1904: bool) -> str:
     return moment.strftime("%Y-%m-%d")
 
 
+def _date_raw(value: float, code: str, date1904: bool) -> Tuple[str, str]:
+    """Lossless form of a date/time cell, whatever its format hides (a month-only
+    format, a time of day behind a date-only format): ``YYYY-MM-DD[ hh:mm:ss[.fff]]``.
+    A time-only format gives ``hh:mm:ss`` below one day; a duration of a day or more
+    stays a number of days. Excel keeps times to the millisecond."""
+    s = _strip_literals(_split_sections(code)[0]).lower().replace("am/pm", "").replace("a/p", "")
+    time_only = ("h" in s or "s" in s) and "d" not in s and "y" not in s
+    if time_only and not 0 <= value < 1:
+        return general_text(value), "n"
+    epoch = datetime(1904, 1, 1) if date1904 else datetime(1899, 12, 30)
+    if not date1904 and value < 60:  # Excel's fictitious 1900-02-29
+        value += 1
+    days = math.floor(value)
+    ms = round((value - days) * 86_400_000)
+    if ms == 86_400_000:
+        days, ms = days + 1, 0
+    try:
+        day = epoch + timedelta(days=days)
+    except OverflowError:
+        return general_text(value), "n"
+    seconds, millis = divmod(ms, 1000)
+    clock = f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}" + (f".{millis:03d}" if millis else "")
+    if time_only:
+        return clock, "d"
+    return day.strftime("%Y-%m-%d") + (f" {clock}" if ms else ""), "d"
+
+
 def _numeric_section(section: str, value: float) -> Optional[str]:
     """Render a non-negative value with one format section. None = unsupported."""
     if re.search(r"[eE][+-]|/", _strip_literals(section)):
@@ -489,6 +516,7 @@ class Cell:
     text: str
     kind: str  # "s" text, "n" number, "d" date, "b" bool, "e" error, "f" formula without a cached value
     formula: Optional[str] = None  # displayed formula, kept only with formulas="cells"
+    fmt: Optional[str] = None  # number format code of a numeric cell (e.g. "0.00%")
 
 
 @dataclass
@@ -710,8 +738,11 @@ class WorkbookReader:
         style = int(c.get("s", "0"))
         code = self.formats[style] if style < len(self.formats) else None
         if code and is_date_code(code):
+            if raw:
+                text, kind = _date_raw(number, code, self.date1904)
+                return Cell(text, kind, fmt=code)
             return Cell(_date_text(number, code, self.date1904), "d")
-        return Cell(format_number(number, code, self.date1904, raw), "n")
+        return Cell(format_number(number, code, self.date1904, raw), "n", fmt=code)
 
     def _describe_filter(self, af) -> List[str]:
         bounds = parse_range(af.get("ref", "") or "")

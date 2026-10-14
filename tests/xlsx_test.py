@@ -217,7 +217,8 @@ def main() -> int:
             failures.append(name)
 
     def run(*extra: str) -> str:
-        proc = subprocess.run(cmd + [str(book), *extra], capture_output=True, timeout=300)
+        # The readable Markdown form; the default compact package has its own test (compact_test.py).
+        proc = subprocess.run(cmd + [str(book), "--xlsx-format", "readable", *extra], capture_output=True, timeout=300)
         if proc.returncode != 0:
             failures.append(f"exit code {proc.returncode} for {extra}")
             print(proc.stderr.decode("utf-8", "replace")[-1500:])

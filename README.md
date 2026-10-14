@@ -45,7 +45,8 @@ markitdown.exe --help                            :: 全部選項
 > - 執行檔沒有數位簽章，第一次執行時 Windows SmartScreen 可能會阻擋。請按「其他資訊」再按「仍要執行」。
 > - 單一執行檔每次啟動都要先解壓縮，大約需要幾秒鐘。
 > - 掃描版 PDF（只有圖片、沒有文字層）轉不出文字，需要搭配 OCR 或 Azure Document Intelligence（`--docintel-endpoint`）。
-> - Excel（.xlsx/.xlsm）使用本專案改寫的轉換器：自動找出真正的表頭列（依自動篩選、樞紐分析表或凍結窗格），數字依 Excel 格式顯示（不會變成科學記號）；註解、自動篩選、合併儲存格、資料驗證、樞紐分析表和隱藏的工作表／列／欄都會標示出來。每張工作表最後會列出所有公式的寫法和範圍（61 萬個公式通常只有幾百種寫法），開頭也會整理工作表之間的資料流向。條件式格式（紅黃綠燈號）目前還不會顯示。相關選項：`--xlsx-header-row "工作表=列"`、`--xlsx-visible-only`、`--xlsx-raw-values`、`--xlsx-formulas cells`（每個儲存格附上公式）、`--xlsx-recalc`（先用 Excel 重新計算）、`--xlsx-classic`。
+> - **Excel 預設輸出「給 Claude 的精簡版」**：開頭是 `00_索引與邏輯.md`，列出每張工作表的欄位，以及程式精確算好的最小值、最大值、合計和每欄的公式寫法。資料用 Tab 分隔，保留完整精度，第一欄是 Excel 列號。小檔案只會產生一個 `.md`；大檔案（約 15 萬 token 以上）會產生資料夾 `<檔名>_md\`，每張工作表一個資料檔，Claude 先讀索引，再讀需要的部分。寫檔前，程式會把每一格讀回來和活頁簿比對。`--xlsx-rows-containing 文字`（圖形介面：「選項 › Excel：只保留含關鍵字的列…」）只保留含有該文字的列，可以重複指定。`--xlsx-part-tokens N` 調整每個檔案的大小。要原本的完整表格，請用 `--xlsx-format readable`。
+> - 完整表格版（`--xlsx-format readable`）使用本專案改寫的轉換器：自動找出真正的表頭列（依自動篩選、樞紐分析表或凍結窗格），數字依 Excel 格式顯示（不會變成科學記號）；註解、自動篩選、合併儲存格、資料驗證、樞紐分析表和隱藏的工作表／列／欄都會標示出來。每張工作表最後會列出所有公式的寫法和範圍（61 萬個公式通常只有幾百種寫法），開頭也會整理工作表之間的資料流向。條件式格式（紅黃綠燈號）目前還不會顯示。相關選項：`--xlsx-header-row "工作表=列"`、`--xlsx-visible-only`、`--xlsx-raw-values`、`--xlsx-formulas cells`（每個儲存格附上公式）、`--xlsx-recalc`（先用 Excel 重新計算）、`--xlsx-classic`。
 > - **用 Excel 重新計算**（`--xlsx-recalc`，或圖形介面的「選項 › Excel：轉換前先用 Excel 重新計算」）：需要 Windows 與 Microsoft Excel。程式會在背景開啟檔案的**副本**，依序重新計算、重新整理所有樞紐分析表、再算一次，最後轉換這個副本；原始檔不會被修改，你開著的 Excel 視窗也不受影響。轉換結果開頭會註明是否重新計算過。
 > - MarkItDown 用來判斷檔案類型的 ONNX Runtime 預設會傳送使用統計給 Microsoft。本工具預設關閉這項功能；如果想開啟，請設定環境變數 `ORT_DISABLE_TELEMETRY=0`。
 
@@ -91,6 +92,7 @@ python app/markitdown_app.py            # 圖形介面
 skills/markitdown/SKILL.md            Claude skill 說明（Claude 讀這個檔案）
 skills/markitdown/scripts/convert.py  轉換核心：CLI 與批次轉換（skill 和 exe 共用）
 skills/markitdown/scripts/xlsx_converter.py  Excel 轉換器（保留表頭、格式、公式與結構資訊）
+skills/markitdown/scripts/xlsx_compact.py    給 Claude 的精簡版 Excel（索引 + 無損資料檔，預設）
 skills/markitdown/scripts/excel_recalc.py    用 Microsoft Excel 重新計算（--xlsx-recalc）
 app/markitdown_app.py                 exe 進入點：圖形介面 / 拖曳 / 命令列
 app/gui.py                            圖形介面（Windows 11 風格、淺色／深色）
@@ -103,6 +105,7 @@ tests/smoke_test.py                   各格式端對端測試（可測 .py 或 
 tests/gui_smoke_test.py               圖形介面測試
 tests/xlsx_test.py                    Excel 轉換測試（表頭、數字格式、公式、隱藏、註解、樞紐）
 tests/recalc_test.py                  用 Excel 重新計算的測試（以模擬的 Excel 檢查流程）
+tests/compact_test.py                 精簡版 Excel 測試（逐格和 openpyxl 比對、分檔、關鍵字篩選）
 .github/workflows/build-windows-exe.yml  Windows 自動建置、測試與發佈
 ```
 

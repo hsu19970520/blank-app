@@ -210,11 +210,12 @@ def create_window(initial_inputs=()):
 class ConverterWindow:
     def __init__(self, root, dnd=None):
         import tkinter as tk
-        from tkinter import filedialog, messagebox, ttk
+        from tkinter import filedialog, messagebox, simpledialog, ttk
         from tkinter import font as tkfont
 
         self.root, self.tk, self.ttk = root, tk, ttk
         self.filedialog, self.messagebox, self.tkfont = filedialog, messagebox, tkfont
+        self.simpledialog = simpledialog
         self.dnd = dnd
 
         self.items: Dict[str, Item] = {}
@@ -235,6 +236,8 @@ class ConverterWindow:
         self.recursive = tk.BooleanVar(value=True)
         self.skip_existing = tk.BooleanVar(value=False)
         self.keep_data_uris = tk.BooleanVar(value=False)
+        self.xlsx_compact = tk.BooleanVar(value=True)
+        self.xlsx_keywords: List[str] = []
         self.xlsx_visible_only = tk.BooleanVar(value=False)
         self.xlsx_formulas_in_cells = tk.BooleanVar(value=False)
         self.xlsx_recalc = tk.BooleanVar(value=False)
@@ -471,8 +474,13 @@ class ConverterWindow:
         options_menu.add_checkbutton(label="加入資料夾時包含子資料夾", variable=self.recursive, command=self._rescan_folders)
         options_menu.add_checkbutton(label="略過已經有 .md 的檔案", variable=self.skip_existing)
         options_menu.add_checkbutton(label="在 Markdown 中保留內嵌圖片（base64）", variable=self.keep_data_uris)
+        options_menu.add_separator()
+        options_menu.add_checkbutton(label="Excel：給 Claude 的精簡版（省 token，建議）", variable=self.xlsx_compact)
+        options_menu.add_command(label=self._keyword_label(), command=self.choose_keywords)
+        self.keyword_menu_index = options_menu.index("end")
         options_menu.add_checkbutton(label="Excel：只輸出看得到的工作表、列和欄", variable=self.xlsx_visible_only)
-        options_menu.add_checkbutton(label="Excel：在每個儲存格的值下方附上公式", variable=self.xlsx_formulas_in_cells)
+        options_menu.add_checkbutton(label="Excel：在每個儲存格的值下方附上公式（改用完整表格版）",
+                                     variable=self.xlsx_formulas_in_cells)
         from excel_recalc import excel_status
 
         excel_ok, _reason = excel_status()
@@ -482,6 +490,7 @@ class ConverterWindow:
             variable=self.xlsx_recalc, state="normal" if excel_ok else "disabled",
         )
         self.options_button["menu"] = options_menu
+        self.options_menu = options_menu
 
         # Content: the list of documents and the Markdown preview, side by side.
         paned = ttk.PanedWindow(main, orient="horizontal")
@@ -770,6 +779,29 @@ class ConverterWindow:
         if folder:
             self.add_inputs([folder])
 
+    def _keyword_label(self) -> str:
+        if not self.xlsx_keywords:
+            return "Excel：只保留含關鍵字的列…"
+        shown = "、".join(self.xlsx_keywords[:3]) + ("…" if len(self.xlsx_keywords) > 3 else "")
+        return f"Excel：只保留含關鍵字的列（目前：{shown}）…"
+
+    def choose_keywords(self) -> None:
+        """Keyword row filter for the compact Excel package (empty = keep every row)."""
+        answer = self.simpledialog.askstring(
+            "只保留含關鍵字的列",
+            "只輸出含有這些文字的列（例如料號、客戶名稱），不分大小寫；\n"
+            "多個關鍵字用逗號隔開，符合任何一個就保留。表頭列會一起保留，\n"
+            "索引裡的統計仍是整張工作表的結果。留空 = 保留全部的列。",
+            initialvalue=", ".join(self.xlsx_keywords), parent=self.root,
+        )
+        if answer is None:
+            return
+        self.xlsx_keywords = [k.strip() for k in re.split(r"[,，、;；\n]+", answer) if k.strip()]
+        if self.xlsx_keywords and not self.xlsx_compact.get():
+            self.xlsx_compact.set(True)
+        self.options_menu.entryconfigure(self.keyword_menu_index, label=self._keyword_label())
+        self._set_status("Excel 關鍵字篩選：" + ("、".join(self.xlsx_keywords) if self.xlsx_keywords else "已取消，保留全部的列"))
+
     def choose_output_dir(self) -> bool:
         folder = self.filedialog.askdirectory(parent=self.root, title="選擇儲存 .md 檔的資料夾")
         if folder:
@@ -872,7 +904,10 @@ class ConverterWindow:
         self.progress.configure(mode="determinate", maximum=len(targets), value=0)
         self.progress.grid()
         self._refresh()
+        compact = self.xlsx_compact.get() and not self.xlsx_formulas_in_cells.get()
         options = {
+            "xlsx_format": "compact" if compact else "readable",
+            "xlsx_rows_containing": list(self.xlsx_keywords) if compact else [],
             "xlsx_visible_only": self.xlsx_visible_only.get(),
             "xlsx_formulas": "cells" if self.xlsx_formulas_in_cells.get() else "summary",
             "xlsx_recalc": self.xlsx_recalc.get(),

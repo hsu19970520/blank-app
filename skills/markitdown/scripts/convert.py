@@ -28,7 +28,7 @@ import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set
 from urllib.parse import parse_qs, urlparse
 
 # pydub warns at import time when ffmpeg is missing; that only matters for audio.
@@ -39,7 +39,7 @@ warnings.filterwarnings("ignore", message=".*ffmpeg.*", category=RuntimeWarning)
 # it loads. Set ORT_DISABLE_TELEMETRY=0 to allow it.
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
-TOOL_VERSION = "1.3.0"
+TOOL_VERSION = "1.4.0"
 
 # File types MarkItDown can convert. Used when scanning folders; explicit file
 # arguments are always attempted regardless of extension.
@@ -48,6 +48,7 @@ SUPPORTED_EXTENSIONS = {
     ".docx",
     ".pptx",
     ".xlsx",
+    ".xlsm",
     ".xls",
     ".html",
     ".htm",
@@ -75,6 +76,9 @@ SUPPORTED_EXTENSIONS = {
 SKIP_IN_FOLDER_SCAN = {".md", ".markdown", ".txt", ".text"}
 
 URL_SCHEMES = ("http", "https", "file", "data")
+
+# Excel workbooks handled by xlsx_converter.py / xlsx_compact.py.
+EXCEL_EXTENSIONS = (".xlsx", ".xlsm")
 
 
 @dataclass
@@ -106,6 +110,15 @@ class Result:
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+@dataclass
+class Converted:
+    """One conversion. ``markdown`` is what to show or print; for an Excel workbook
+    too big for one file it is the index, and ``files`` holds the whole package."""
+
+    markdown: str
+    files: Optional[Dict[str, str]] = None  # file name -> content (index first)
 
 
 def is_url(value: str) -> bool:
@@ -253,33 +266,101 @@ def make_stream_info(extension: Optional[str], mime_type: Optional[str], charset
     return StreamInfo(extension=extension or None, mimetype=mime_type or None, charset=charset or None)
 
 
+def is_excel_file(source: Source) -> bool:
+    return not (source.is_stdin or source.is_url) and Path(source.value).suffix.lower() in EXCEL_EXTENSIONS
+
+
+def convert_document(
+    converter, source: Source, stream_info=None, keep_data_uris: bool = False,
+    progress: Optional[Callable[[str], None]] = None, **options,
+) -> Converted:
+    """``options`` are passed through to the converters (e.g. xlsx_visible_only).
+
+    Excel workbooks (.xlsx/.xlsm) become the compact package for Claude by default
+    (``xlsx_format="compact"``, see xlsx_compact.py); ``"readable"`` gives one
+    Markdown document with formatted tables. Per-cell formulas need the readable form.
+    With ``xlsx_recalc``, the workbook is first recalculated by Microsoft Excel
+    (formulas and pivot tables) in a temporary copy, and the copy is converted."""
+    recalc = options.pop("xlsx_recalc", False)
+    xlsx_format = options.pop("xlsx_format", "compact")
+    contains = options.pop("xlsx_rows_containing", None) or []
+    part_tokens = options.pop("xlsx_part_tokens", None)
+    if options.get("xlsx_formulas") == "cells":
+        xlsx_format = "readable"
+    excel = is_excel_file(source)
+    path, workdir, note = source.value, None, ""
+    try:
+        if excel and recalc:
+            from excel_recalc import recalculate
+
+            recalculated = recalculate(source.value, progress=progress)
+            path, workdir, note = str(recalculated.path), recalculated.workdir, recalculated.note()
+        if excel and xlsx_format == "compact":
+            from xlsx_compact import CompactOptions, build_package
+
+            compact = CompactOptions(
+                visible_only=bool(options.get("xlsx_visible_only")),
+                contains=list(contains),
+                header_rows=dict(options.get("xlsx_header_rows") or {}),
+                recalc_note=note,
+            )
+            if part_tokens:
+                compact.budget = compact.part_budget = int(part_tokens)
+            if progress:
+                progress("正在整理 Excel 資料並逐格核對…")
+            package = build_package(path, Path(source.value).name, compact)
+            return Converted(package.index, None if package.single else package.files)
+        if note:
+            options["xlsx_recalc_note"] = note
+        if source.is_stdin:
+            data = io.BytesIO(sys.stdin.buffer.read())
+            result = converter.convert_stream(data, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
+        else:
+            result = converter.convert(path, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
+        return Converted(result.markdown or "")
+    finally:
+        if workdir is not None:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
 def convert_source(
     converter, source: Source, stream_info=None, keep_data_uris: bool = False,
     progress: Optional[Callable[[str], None]] = None, **options,
 ) -> str:
-    """``options`` are passed through to the converters (e.g. xlsx_visible_only).
+    """Like convert_document, but only the Markdown text (the index for a multi-file package)."""
+    return convert_document(converter, source, stream_info, keep_data_uris, progress, **options).markdown
 
-    With ``xlsx_recalc``, an .xlsx/.xlsm file is first recalculated by Microsoft
-    Excel (formulas and pivot tables) in a temporary copy, and the copy is converted."""
-    recalc = options.pop("xlsx_recalc", False)
-    if recalc and not (source.is_stdin or source.is_url) and Path(source.value).suffix.lower() in (".xlsx", ".xlsm"):
-        from excel_recalc import recalculate
 
-        recalculated = recalculate(source.value, progress=progress)
-        try:
-            options["xlsx_recalc_note"] = recalculated.note()
-            result = converter.convert(
-                str(recalculated.path), stream_info=stream_info, keep_data_uris=keep_data_uris, **options
-            )
-        finally:
-            shutil.rmtree(recalculated.workdir, ignore_errors=True)
-        return result.markdown or ""
-    if source.is_stdin:
-        data = io.BytesIO(sys.stdin.buffer.read())
-        result = converter.convert_stream(data, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
-    else:
-        result = converter.convert(source.value, stream_info=stream_info, keep_data_uris=keep_data_uris, **options)
-    return result.markdown or ""
+def package_folder(output: Path) -> Path:
+    """Folder for a multi-file Excel package that would otherwise be ``output`` (a .md path)."""
+    return output.with_name(f"{output.stem}_md") if output.suffix.lower() == ".md" else output
+
+
+def write_converted(converted: Converted, output: Path) -> Path:
+    """Write a conversion and return the file to open: ``output`` itself, or the
+    index inside the package folder. Leftover parts from an earlier, larger run of
+    the same package are removed; nothing else in the folder is touched."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if not converted.files:
+        output.write_text(converted.markdown, encoding="utf-8")
+        return output
+    from xlsx_compact import INDEX_NAME
+
+    folder = package_folder(output)
+    folder.mkdir(parents=True, exist_ok=True)
+    if (folder / INDEX_NAME).exists():
+        for old in folder.glob("[0-9][0-9]_*.md"):
+            if old.name not in converted.files:
+                old.unlink()
+    for name, text in converted.files.items():
+        (folder / name).write_text(text, encoding="utf-8")
+    return folder / INDEX_NAME
+
+
+def package_index(output: Path) -> Path:
+    from xlsx_compact import INDEX_NAME
+
+    return package_folder(output) / INDEX_NAME
 
 
 def describe_error(exc: BaseException) -> str:
@@ -318,14 +399,14 @@ def convert_batch(
         if on_start:
             on_start(index, total, source)
         output = plan_output(source, out_dir, taken)
-        if skip_existing and output.exists():
-            result = Result(source, output, None, None)
+        existing = [p for p in (output, package_index(output)) if p.exists()]
+        if skip_existing and existing:
+            result = Result(source, existing[0], None, None)
         else:
             try:
-                markdown = convert_source(converter, source, stream_info, keep_data_uris, progress, **(options or {}))
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_text(markdown, encoding="utf-8")
-                result = Result(source, output, markdown, None)
+                converted = convert_document(converter, source, stream_info, keep_data_uris, progress, **(options or {}))
+                written = write_converted(converted, output)
+                result = Result(source, written, converted.markdown, None)
             except Exception as exc:  # report and keep going with the rest of the batch
                 result = Result(source, None, None, describe_error(exc), type(exc).__name__)
         results.append(result)
@@ -376,13 +457,25 @@ def build_parser(prog: str = "markitdown") -> argparse.ArgumentParser:
         help="header row for a sheet, e.g. \"Report=14\" (0 = no header); repeatable. "
              "Default: detected from the autofilter, pivot layout or freeze panes",
     )
+    excel.add_argument("--xlsx-format", choices=["compact", "readable"], default="compact",
+                       help="'compact' (default): a small index with exact column statistics and formula logic, "
+                            "plus lossless tab-separated data; workbooks over ~150k tokens are split into a folder "
+                            "<name>_md/ of files. 'readable': one Markdown document with formatted tables")
+    excel.add_argument("--xlsx-rows-containing", action="append", default=[], metavar="TEXT",
+                       help="compact: keep only rows containing TEXT (case-insensitive; repeatable = any of them). "
+                            "Header rows are kept and the index statistics still cover the whole sheet")
+    excel.add_argument("--xlsx-part-tokens", type=int, default=None, metavar="N",
+                       help="compact: at most about N tokens per file; bigger workbooks are split "
+                            "(default: one file up to 150000, otherwise parts of 100000)")
     excel.add_argument("--xlsx-visible-only", action="store_true",
                        help="leave out hidden sheets, rows and columns (as seen in Excel)")
     excel.add_argument("--xlsx-raw-values", action="store_true",
-                       help="full-precision numbers instead of Excel's display format")
+                       help="readable: full-precision numbers instead of Excel's display format "
+                            "(compact always uses full precision)")
     excel.add_argument("--xlsx-formulas", choices=["none", "summary", "cells"], default="summary",
                        help="formulas: 'summary' lists every formula pattern per sheet (default), "
-                            "'cells' also writes each cell's formula under its value, 'none' leaves them out")
+                            "'cells' also writes each cell's formula under its value (implies --xlsx-format readable), "
+                            "'none' leaves them out")
     excel.add_argument("--xlsx-recalc", action="store_true",
                        help="recalculate with Microsoft Excel first (Windows + Excel): refreshes pivot tables "
                             "and formulas in a copy, then converts it; the original file is not changed")
@@ -453,7 +546,14 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         if not sep or not sheet or not row.strip().isdigit():
             parser.error(f'--xlsx-header-row expects SHEET=ROW, e.g. "Report=14" (got {spec!r})')
         header_rows[sheet.strip()] = int(row)
+    if args.xlsx_rows_containing and (args.xlsx_format != "compact" or args.xlsx_formulas == "cells"):
+        parser.error("--xlsx-rows-containing works with the compact format only")
+    if args.xlsx_part_tokens is not None and args.xlsx_part_tokens < 1000:
+        parser.error("--xlsx-part-tokens must be at least 1000")
     options = {
+        "xlsx_format": "readable" if args.xlsx_classic else args.xlsx_format,
+        "xlsx_rows_containing": args.xlsx_rows_containing,
+        "xlsx_part_tokens": args.xlsx_part_tokens,
         "xlsx_visible_only": args.xlsx_visible_only,
         "xlsx_raw_values": args.xlsx_raw_values,
         "xlsx_formulas": args.xlsx_formulas,
@@ -484,28 +584,29 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         failures = 0
         for source in sources:
             try:
-                markdown = convert_source(converter, source, stream_info, args.keep_data_uris, progress, **options)
+                converted = convert_document(converter, source, stream_info, args.keep_data_uris, progress, **options)
             except Exception as exc:
                 failures += 1
                 print(f"[FAIL] {source.value}: {describe_error(exc)}", file=sys.stderr)
                 continue
             if len(sources) > 1:
                 print(f"\n<!-- source: {source.value} -->\n")
-            print(markdown)
+            print(converted.markdown)
+            if converted.files:
+                print(f"[NOTE] {source.value}: too large for one file; only the index was printed. "
+                      f"Write all {len(converted.files)} files with --out-dir DIR or -o DIR.", file=sys.stderr)
         return 1 if failures else 0
 
     if args.output:
         source = sources[0]
         try:
-            markdown = convert_source(converter, source, stream_info, args.keep_data_uris, progress, **options)
+            converted = convert_document(converter, source, stream_info, args.keep_data_uris, progress, **options)
         except Exception as exc:
             print(f"[FAIL] {source.value}: {describe_error(exc)}", file=sys.stderr)
             return 1
-        output = Path(args.output)
-        if output.parent and not output.parent.exists():
-            output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(markdown, encoding="utf-8")
-        print(f"[OK]   {source.value} -> {output}")
+        written = write_converted(converted, Path(args.output))
+        extra = f" (+{len(converted.files) - 1} data files in {written.parent})" if converted.files else ""
+        print(f"[OK]   {source.value} -> {written}{extra}")
         return 0
 
     out_dir = Path(args.out_dir) if args.out_dir else None

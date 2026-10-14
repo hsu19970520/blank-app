@@ -112,6 +112,8 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
     want = {"doc.md", "doc.pdf.md", "page.md", "sheet.md", "slides.md", "bundle.md", "sub/nested.md"}
     check("outputs written", want.issubset(produced), str(produced))
     check("no duplicate conversion", "doc (2).md" not in produced, str(produced))
+    sheet_md = (out / "sheet.md").read_text(encoding="utf-8") if (out / "sheet.md").exists() else ""
+    check("Excel gets the compact package by default", "給 Claude 的精簡版" in sheet_md and "```tsv" in sheet_md, sheet_md[:200])
     statuses = {Path(app.items[i].value).name: app.items[i].status for i in app._leaf_iids()}
     check("missing file failed", statuses.get("missing.pdf") == "failed", str(statuses))
     check("others done", all(s == "done" for n, s in statuses.items() if n != "missing.pdf"), str(statuses))
