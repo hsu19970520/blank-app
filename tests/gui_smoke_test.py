@@ -146,7 +146,8 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
     check("panel opens with a large well", panel.well.winfo_height() > 150 and not panel.holder.winfo_ismapped())
     panel.add([str(samples / "sheet.xlsx"), str(samples / "page.html"), str(missing)])
     wait(lambda: not panel.busy, "the panel to convert")
-    pump(0.3)
+    wait(lambda: not panel.animating, "the panel's animations to settle")
+    pump(0.1)
     names = [c.result.output.name if c.result.ok else "error" for c in panel.cards]
     check("panel shows newest result first", names == ["error", "page.md", "sheet.md"], str(names))
     check("well shrinks to one row once there are results", panel.well.winfo_height() < 100 and panel.holder.winfo_ismapped())
@@ -164,8 +165,30 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
     check("copy puts the card's Markdown on the clipboard", "MarkItDownSmoke" in root.clipboard_get())
     shot("5_panel")
     panel.clear()
-    pump(0.2)
-    check("clearing brings the large well back", not panel.holder.winfo_ismapped())
+    wait(lambda: not panel.animating, "the well to open up again")
+    pump(0.1)
+    check("clearing brings the large well back", not panel.holder.winfo_ismapped() and panel.well.winfo_height() > 150)
+
+    # Motion: easing curves end where they should, colours blend, tweens retarget from where they are.
+    from motion import EASE_IN_OUT, EASE_OUT, Motion, blend
+
+    samples = [i / 100 for i in range(101)]
+    check("easing curves run 0 → 1 without turning back",
+          all(f(0) == 0 and f(1) == 1 and all(f(b) >= f(a) for a, b in zip(samples, samples[1:]))
+              for f in (EASE_OUT, EASE_IN_OUT)))
+    check("ease-out is front-loaded, ease-in-out starts slowly", EASE_OUT(0.25) > 0.7 and EASE_IN_OUT(0.25) < 0.1)
+    check("colour blend stands in for opacity", blend("#000000", "#FFFFFF", 0.5) == "#808080")
+    m = Motion(root)
+    m.set("x", 0.0)
+    m.to("x", 1.0, 200, EASE_OUT, lambda: None)
+    pump(0.08)
+    midway = m.get("x")
+    m.to("x", 0.0, 100, EASE_OUT, lambda: None)
+    pump(0.02)
+    check("an interrupted tween restarts from its current value", 0 < midway < 1 and 0 < m.get("x") <= midway,
+          f"{midway} -> {m.get('x')}")
+    wait(lambda: not m.active, "the tween to finish")
+    check("a retargeted tween lands on the new target", m.get("x") == 0.0)
     panel.close()
     pump(0.2)
     check("closing the panel keeps the main window", panel.win.state() == "withdrawn" and root.winfo_exists())

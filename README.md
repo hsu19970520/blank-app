@@ -105,6 +105,7 @@ skills/markitdown/scripts/excel_recalc.py    用 Microsoft Excel 重新計算（
 app/markitdown_app.py                 exe 進入點：圖形介面 / 拖曳 / 命令列
 app/gui.py                            圖形介面（Windows 11 風格、淺色／深色）
 app/panel.py                          快速轉換面板（拖進來轉換，把結果卡片拖進 Claude）
+app/motion.py                         介面動畫（緩動曲線、顏色漸變、可中途改變目標的補間）
 app/assets/                           App 圖示（由 packaging/make_icon.py 產生）
 packaging/markitdown.spec             PyInstaller 設定
 packaging/requirements-build.txt      建置用相依套件（固定版本）

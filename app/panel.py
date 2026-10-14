@@ -10,15 +10,30 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 import convert
+from motion import EASE, EASE_IN_OUT, EASE_OUT, Motion, blend, reduced_motion
 from xlsx_compact import INDEX_NAME, estimate_tokens
 
 PANEL_TITLE = "快速轉換"
 MAX_CARDS = 30
+
+# Motion budget (see motion.py). Nothing animates on a keyboard action, and with
+# Windows' animation effects off nothing moves or resizes; colour fades stay, shorter.
+HOVER_IN_MS, HOVER_OUT_MS = 150, 100  # drop-target highlight: in on drag enter, out faster
+RESIZE_MS = 260  # the well folding to one row / opening up again
+ENTER_MS = 240  # a result card arriving
+STAGGER_MS = 50  # between cards that arrive together
+PRESS_IN_MS, PRESS_OUT_MS = 100, 160  # card press: down quickly, back a little slower
+PROGRESS_MS = 220
+PRESS_SCALE = 0.97
+ENTER_RISE = 8  # px the card content rises while it fades in
+COMPACT_WELL = 76  # px, one-row well once there are results
+LAYOUT_SWITCH = 132  # px; below this the well draws its one-row layout
 
 
 @dataclass
@@ -113,6 +128,9 @@ class QuickPanel:
         self._offset = 0  # files finished before the batch now running
         self.cards: List[ResultCard] = []
         self.pinned = tk.BooleanVar(value=True)
+        self.reduce_motion = reduced_motion()
+        self._compact: Optional[bool] = None  # well layout: None until first laid out
+        self._next_enter = 0.0  # perf_counter time the next card may start entering (stagger)
 
         k = self.scale
         win = tk.Toplevel(app.root)
@@ -129,6 +147,7 @@ class QuickPanel:
             except Exception:
                 pass
         win.protocol("WM_DELETE_WINDOW", self.close)
+        self.motion = Motion(win)
         self._build()
         self._bind_keys()
         self.repaint()
@@ -183,6 +202,7 @@ class QuickPanel:
 
         # Footer: what the settings are, where to change them, whether to float.
         footer = ttk.Frame(frame)
+        self.footer = footer
         footer.grid(row=3, column=0, sticky="ew", pady=(round(10 * k), 0))
         footer.columnconfigure(0, weight=1)
         self.settings_label = ttk.Label(footer, style="Secondary.TLabel")
@@ -225,41 +245,68 @@ class QuickPanel:
         for card in self.cards:
             card.draw()
 
+    @property
+    def animating(self) -> bool:
+        return self.motion.active or any(card.motion.active for card in self.cards)
+
+    def _ms(self, duration: int, moves: bool = True) -> int:
+        """Movement is dropped under reduced motion; colour fades get shorter."""
+        if not self.reduce_motion:
+            return duration
+        return 0 if moves else round(duration * 0.7)
+
     def _draw_well(self) -> None:
         canvas, c, k = self.well, self.colors, self.scale
         canvas.delete("all")
         w, h = canvas.winfo_width(), canvas.winfo_height()
         if w < 20 or h < 20:
             return
-        active = self.hovering
+        hover = self.motion.get("hover", 0.0)
+        fill = blend(c["surface"], c["drop"], hover)
         inset = round(2 * k)
         rounded_rect(
-            canvas, inset, inset, w - inset, h - inset, round(14 * k),
-            fill=c["drop"] if active else c["surface"],
-            outline=c["accent"] if active else c["border"], width=max(1, round((2 if active else 1.5) * k)),
-            dash=() if active else (round(6 * k), round(4 * k)),
+            canvas, inset, inset, w - inset, h - inset, round(14 * k), fill=fill,
+            outline=blend(c["border"], c["accent"], hover), width=max(1, round((1.5 + 0.5 * hover) * k)),
+            dash=() if hover >= 0.5 else (round(6 * k), round(4 * k)),
         )
+        # The layout follows the well's current height, so it stays right while it resizes.
+        # Content dips out and back in at the two switch points (layout, drag wording) so the
+        # swap reads as one change instead of two states overlapping.
+        switch = round(LAYOUT_SWITCH * k)
+        compact = h < switch
+        alpha = min(1.0, abs(h - switch) / (28 * k)) if "well_h" in self.motion.jobs else 1.0
+        if 0.0 < hover < 1.0:
+            alpha *= abs(hover - 0.5) * 2
+        active = hover >= 0.5
+
+        def ink(color: str) -> str:
+            return blend(fill, color, alpha)
+
         fonts = self.app.fonts
+        show_widgets = alpha > 0.6 and "well_h" not in self.motion.jobs  # Tk widgets can't fade: hide mid-resize
         if self.busy:
             done, total = self.progress_value
             count = f"第 {min(done + 1, total)} 個，共 {total} 個" + ("　·　可以繼續拖進來" if self.dnd else "")
-            self.progress.configure(maximum=max(total, 1), value=done)
-            if self.cards:  # one row: what is happening, then the bar
+            self.progress.configure(maximum=max(total, 1))
+            if compact:  # one row: what is happening, then the bar
                 pad = round(18 * k)
-                canvas.create_text(pad, h / 2 - round(14 * k), anchor="w", font=fonts["strong"], fill=c["text"],
+                bar = round((w - 2 * pad) * 0.45)
+                canvas.create_text(pad, h / 2 - round(14 * k), anchor="w", font=fonts["strong"], fill=ink(c["text"]),
                                    text=fit_text(fonts["strong"], self.status or "正在轉換…", w - 2 * pad))
-                canvas.create_window(pad, h / 2 + round(14 * k), anchor="w", window=self.progress,
-                                     width=round((w - 2 * pad) * 0.45))
-                canvas.create_text(pad + round((w - 2 * pad) * 0.45) + round(12 * k), h / 2 + round(14 * k),
-                                   anchor="w", font=fonts["caption"], fill=c["secondary"], text=f"{min(done + 1, total)}/{total}")
+                if show_widgets:
+                    canvas.create_window(pad, h / 2 + round(14 * k), anchor="w", window=self.progress, width=bar)
+                canvas.create_text(pad + bar + round(12 * k), h / 2 + round(14 * k), anchor="w", font=fonts["caption"],
+                                   fill=ink(c["secondary"]), text=f"{min(done + 1, total)}/{total}")
             else:
                 cx, cy = w / 2, h * 0.42
-                canvas.create_text(cx, cy, text=self.status or "正在轉換…", font=fonts["strong"], fill=c["text"],
+                canvas.create_text(cx, cy, text=self.status or "正在轉換…", font=fonts["strong"], fill=ink(c["text"]),
                                    width=w - round(40 * k), justify="center")
-                canvas.create_text(cx, cy + round(30 * k), font=fonts["caption"], fill=c["secondary"], text=count)
-                canvas.create_window(cx, cy + round(64 * k), window=self.progress, width=w - round(64 * k))
+                canvas.create_text(cx, cy + round(30 * k), font=fonts["caption"], fill=ink(c["secondary"]), text=count)
+                if show_widgets:
+                    canvas.create_window(cx, cy + round(64 * k), window=self.progress, width=w - round(64 * k))
             return
-        ink = c["accent"] if active else c["secondary"]
+        icon_ink = ink(blend(c["secondary"], c["accent"], hover))
+        nudge = 0 if self.reduce_motion else 4 * k * hover  # the arrow dips toward the page while a drag hovers
         if active:
             title, note = "放開就開始轉換", "轉好的檔案會出現在下方"
         elif self.dnd:
@@ -267,24 +314,25 @@ class QuickPanel:
                 else ("再拖入檔案", "可以一次拖入好幾個")
         else:
             title, note = "選擇要轉換的檔案", "轉好後可以複製內容，或開啟檔案位置"
-        if self.cards:  # one row: icon, words, button
+        if compact:  # one row: icon, words, button
             pad = round(18 * k)
-            self._page_icon(canvas, pad + 13 * k, h / 2, 0.75, ink)
+            self._page_icon(canvas, pad + 13 * k, h / 2, 0.75, icon_ink, nudge * 0.75)
             text_x = pad + round(40 * k)
-            canvas.create_text(text_x, h / 2 - round(10 * k), anchor="w", text=title, font=fonts["strong"], fill=c["text"])
-            canvas.create_text(text_x, h / 2 + round(12 * k), anchor="w", text=note, font=fonts["caption"], fill=c["secondary"])
-            if not active:
+            canvas.create_text(text_x, h / 2 - round(10 * k), anchor="w", text=title, font=fonts["strong"], fill=ink(c["text"]))
+            canvas.create_text(text_x, h / 2 + round(12 * k), anchor="w", text=note, font=fonts["caption"],
+                               fill=ink(c["secondary"]))
+            if not active and show_widgets:
                 canvas.create_window(w - pad, h / 2, anchor="e", window=self.choose_button)
             return
         cx, cy = w / 2, h / 2 - round(46 * k)
-        self._page_icon(canvas, cx, cy, 1.0, ink)
-        canvas.create_text(cx, cy + round(50 * k), text=title, font=fonts["strong"], fill=c["text"])
-        canvas.create_text(cx, cy + round(76 * k), text=note, font=fonts["caption"], fill=c["secondary"],
+        self._page_icon(canvas, cx, cy, 1.0, icon_ink, nudge)
+        canvas.create_text(cx, cy + round(50 * k), text=title, font=fonts["strong"], fill=ink(c["text"]))
+        canvas.create_text(cx, cy + round(76 * k), text=note, font=fonts["caption"], fill=ink(c["secondary"]),
                            width=w - round(32 * k), justify="center")
-        if not active:
+        if not active and show_widgets:
             canvas.create_window(cx, cy + round(114 * k), window=self.choose_button)
 
-    def _page_icon(self, canvas, cx, cy, size: float, ink: str) -> None:
+    def _page_icon(self, canvas, cx, cy, size: float, ink: str, nudge: float = 0.0) -> None:
         """A page with an arrow dropping in, as on the main window's empty state."""
         k = self.scale * size
         stroke = max(2, round(2 * self.scale))
@@ -292,8 +340,55 @@ class QuickPanel:
         canvas.create_line(left, top, right - fold, top, right, top + fold, right, bottom, left, bottom, left, top,
                            fill=ink, width=stroke, joinstyle="round")
         canvas.create_line(right - fold, top, right - fold, top + fold, right, top + fold, fill=ink, width=stroke)
-        canvas.create_line(cx, cy - 9 * k, cx, cy + 13 * k, fill=ink, width=stroke, arrow="last",
+        canvas.create_line(cx, cy - 9 * k + nudge, cx, cy + 13 * k + nudge, fill=ink, width=stroke, arrow="last",
                            arrowshape=(9 * k, 9 * k, 4 * k))
+
+    def _set_layout(self, compact: bool) -> None:
+        """Big well while there is nothing to hand over; one row above the results after."""
+        if compact == self._compact:
+            return
+        first = self._compact is None
+        self._compact = compact
+        k = self.scale
+        instant = first or self.reduce_motion or not self.win.winfo_viewable()
+        current = self.well.winfo_height()
+        if compact:
+            target = round(COMPACT_WELL * k)
+            self.frame.rowconfigure(0, weight=0)
+            self.frame.rowconfigure(2, weight=1)
+            self.header.grid(row=1, column=0, sticky="ew", pady=(round(14 * k), round(8 * k)))
+            self.holder.grid(row=2, column=0, sticky="nsew")
+            if instant:
+                self.motion.set("well_h", target)
+                self.well.configure(height=target)
+                return
+            # Start where it is, less the room the results header now takes, so nothing below
+            # (the footer) is pushed out of the window; the list then opens up underneath.
+            start = max(target, current - self.header.winfo_reqheight() - round(22 * k))
+            self.well.configure(height=start)
+            self.motion.to("well_h", target, RESIZE_MS, EASE_IN_OUT, self._apply_well_height, start=start)
+        else:
+            self.header.grid_remove()
+            self.holder.grid_remove()
+            self.frame.rowconfigure(2, weight=0)
+            if instant:
+                self.frame.rowconfigure(0, weight=1)
+                return
+            # Grow back into the space the results took, then follow the window again.
+            target = self.frame.winfo_height() - round(24 * k) - self.footer.winfo_height() - round(10 * k)
+            self.frame.rowconfigure(0, weight=0)
+            self.motion.to("well_h", max(target, current), RESIZE_MS, EASE_IN_OUT, self._apply_well_height,
+                           start=current, on_done=lambda: self.frame.rowconfigure(0, weight=1))
+
+    def _apply_well_height(self) -> None:
+        self.well.configure(height=round(self.motion.get("well_h")))
+        self._draw_well()
+
+    def _animate_progress(self) -> None:
+        done, total = self.progress_value
+        self.progress.configure(maximum=max(total, 1))
+        self.motion.to("progress", done, self._ms(PROGRESS_MS), EASE_OUT,
+                       lambda: self.progress.configure(value=self.motion.get("progress", 0.0)))
 
     def _refresh(self) -> None:
         options = self.app.conversion_options()
@@ -302,20 +397,7 @@ class QuickPanel:
             excel += f"（只留含「{'、'.join(options['xlsx_rows_containing'][:2])}」的列）"
         where = "存到原檔旁" if self.app.output_destination() is None else f"存到 {self.app.output_destination().name}"
         self.settings_label.configure(text=f"{excel} · {where}")
-        # Progressive disclosure: a big well until there is something to hand over,
-        # then a one-row well above the results.
-        k = self.scale
-        if self.cards:
-            self.frame.rowconfigure(0, weight=0)
-            self.frame.rowconfigure(2, weight=1)
-            self.well.configure(height=round(76 * k))
-            self.header.grid(row=1, column=0, sticky="ew", pady=(round(14 * k), round(8 * k)))
-            self.holder.grid(row=2, column=0, sticky="nsew")
-        else:
-            self.frame.rowconfigure(0, weight=1)
-            self.frame.rowconfigure(2, weight=0)
-            self.header.grid_remove()
-            self.holder.grid_remove()
+        self._set_layout(bool(self.cards))
         self._draw_well()
 
     # ----- scrolling ------------------------------------------------------- #
@@ -337,20 +419,25 @@ class QuickPanel:
             self.list_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
     # ----- dropping in ----------------------------------------------------- #
+    def _hover(self, on: bool) -> None:
+        """Drop-target highlight: a colour transition, retargeted if the drag leaves early."""
+        if on == self.hovering:
+            return
+        self.hovering = on
+        duration = HOVER_IN_MS if on else HOVER_OUT_MS
+        self.motion.to("hover", 1.0 if on else 0.0, self._ms(duration, moves=False), EASE, self._draw_well)
+
     def _on_drag_enter(self, event):
-        self.hovering = True
-        self._draw_well()
+        self._hover(True)
         return event.action
 
     def _on_drag_leave(self, event):
-        self.hovering = False
-        self._draw_well()
+        self._hover(False)
         return event.action
 
     def _on_drop(self, event):
-        self.hovering = False
+        self._hover(False)
         self.add(self.win.tk.splitlist(event.data))
-        self._draw_well()
         return event.action
 
     def choose_files(self) -> None:
@@ -365,6 +452,7 @@ class QuickPanel:
         if self.busy:
             self.pending.extend(values)
             self.progress_value = (self.progress_value[0], self.progress_value[1] + len(convert.collect_sources(values, recursive=True)))
+            self._animate_progress()
             self._draw_well()
             return
         self._start(values)
@@ -377,6 +465,8 @@ class QuickPanel:
         self.busy = True
         self.status = "正在準備轉換引擎…" if self.app.converter is None else f"正在轉換 {Path(sources[0].value).name}"
         self.progress_value = (0, len(sources))
+        self.motion.set("progress", 0.0)
+        self.progress.configure(value=0)
         self._draw_well()
         args = (sources, self.app.output_destination(), self.app.keep_data_uris.get(), self.app.conversion_options())
         threading.Thread(target=self._worker, args=args, daemon=True).start()
@@ -414,10 +504,12 @@ class QuickPanel:
             _, n, _total, name = event
             self.progress_value = (offset + n - 1, self.progress_value[1])
             self.status = f"正在轉換 {name}"
+            self._animate_progress()
         elif kind == "status":
             self.status = event[1]
         elif kind == "result":
             self.progress_value = (offset + event[1], self.progress_value[1])
+            self._animate_progress()
             self._add_card(event[2])
         elif kind == "failed":
             self._add_card(PanelResult("轉換引擎", error=event[1]))
@@ -437,6 +529,7 @@ class QuickPanel:
     # ----- results --------------------------------------------------------- #
     def _add_card(self, result: PanelResult) -> None:
         card = ResultCard(self, result)
+        card.motion.set("enter", 0.0)
         if self.cards:
             card.canvas.pack(fill="x", pady=(0, round(8 * self.scale)), before=self.cards[0].canvas)
         else:
@@ -449,6 +542,11 @@ class QuickPanel:
         if result.ok:
             card.canvas.focus_set()
         self._refresh()
+        # Cards that arrive together come in one after another, never blocking the list.
+        now = time.perf_counter()
+        delay = max(0.0, self._next_enter - now)
+        self._next_enter = now + delay + STAGGER_MS / 1000
+        card.motion.to("enter", 1.0, self._ms(ENTER_MS, moves=False), EASE_OUT, card.draw, delay_ms=round(delay * 1000))
 
     def clear(self) -> None:
         for card in self.cards:
@@ -497,16 +595,19 @@ class ResultCard:
     def __init__(self, panel: QuickPanel, result: PanelResult):
         self.panel, self.result = panel, result
         self.hover = False
+        self._width = 0
         tk = panel.tk
         self.canvas = tk.Canvas(panel.list_frame, height=round(92 * panel.scale), highlightthickness=0,
                                 borderwidth=0, takefocus=1, cursor="hand2" if result.ok else "")
         c = self.canvas
-        c.bind("<Configure>", lambda _e: self.draw())
+        self.motion = Motion(c)
+        c.bind("<Configure>", self._on_configure)
         c.bind("<Enter>", lambda _e: self._set_hover(True))
         c.bind("<Leave>", lambda _e: self._set_hover(False))
         c.bind("<FocusIn>", lambda _e: self.draw())
         c.bind("<FocusOut>", lambda _e: self.draw())
-        c.bind("<Button-1>", lambda _e: c.focus_set())
+        c.bind("<ButtonPress-1>", lambda _e: (c.focus_set(), self._press(True)))
+        c.bind("<ButtonRelease-1>", lambda _e: self._press(False))
         c.bind("<Double-1>", lambda _e: self.open())
         c.bind("<Return>", lambda _e: self.open())
         c.bind("<Button-3>", self._menu)
@@ -517,64 +618,113 @@ class ResultCard:
         if panel.dnd is not None and result.ok:
             c.drag_source_register(1, panel.dnd.DND_FILES)
             c.dnd_bind("<<DragInitCmd>>", self._drag_init)
+            c.dnd_bind("<<DragEndCmd>>", lambda e: (self._press(False), e.action)[1])
 
     # ----- drawing --------------------------------------------------------- #
+    def _on_configure(self, event) -> None:
+        if event.width != self._width:  # height changes come from draw() itself
+            self._width = event.width
+            self.draw()
+
     def _set_hover(self, value: bool) -> None:
+        # Tens of times a day: an instant change, no transition.
         self.hover = value
         self.draw()
+
+    def _press(self, down: bool) -> None:
+        """Press feedback: the card gives a little under the pointer, then springs back."""
+        if not self.result.ok:
+            return
+        duration = PRESS_IN_MS if down else PRESS_OUT_MS
+        self.motion.to("press", 1.0 if down else 0.0, self.panel._ms(duration, moves=False), EASE_OUT, self.draw)
 
     def draw(self) -> None:
         c, colors, k, fonts = self.canvas, self.panel.colors, self.panel.scale, self.panel.app.fonts
         c.delete("all")
-        c.configure(background=colors["bg"])
+        bg = colors["bg"]
+        c.configure(background=bg)
         w = c.winfo_width()
         if w < 40:
             return
         r = self.result
+        moves = not self.panel.reduce_motion
+        enter = self.motion.get("enter", 1.0)
+        press = self.motion.get("press", 0.0)
+        rise = (1 - enter) * ENTER_RISE * k if moves else 0.0
+
+        def ink(color: str) -> str:  # fades in with the card
+            return blend(bg, color, enter)
+
         focused = c.focus_displayof() is c if c.winfo_exists() else False
+        raised = (self.hover or focused) and r.ok
         pad = round(14 * k)
         icon_w, icon_h = round(30 * k), round(38 * k)
         text_x = pad + icon_w + round(14 * k)
         text_w = w - text_x - pad
         items = []
+        y = pad + rise
         if r.ok:
-            detail = describe_tokens(r.tokens) + (" · 已逐格核對" if r.excel else "")
-            lines = [(r.output.name, fonts["strong"], colors["text"]), (detail, fonts["body"], colors["secondary"])]
+            # The token estimate is what people come for: it gets the text colour; the
+            # verification mark gets the success colour; everything else stays quiet.
+            items.append(c.create_text(text_x, y, text=fit_text(fonts["strong"], r.output.name, text_w),
+                                       font=fonts["strong"], fill=ink(colors["text"]), anchor="nw"))
+            y = c.bbox(items[-1])[3] + round(3 * k)
+            items.append(c.create_text(text_x, y, text=describe_tokens(r.tokens), font=fonts["body"],
+                                       fill=ink(colors["text"]), anchor="nw"))
+            if r.excel:
+                x = c.bbox(items[-1])[2] + round(8 * k)
+                c.create_text(x, y, text="✓ 已逐格核對", font=fonts["body"], fill=ink(colors["success"]), anchor="nw")
+            y = c.bbox(items[-1])[3] + round(3 * k)
+            quiet = []
             if r.data_files:  # a split workbook: the index is what to hand over first
-                lines.append((f"同資料夾另有 {r.data_files} 個資料檔，共{describe_tokens(r.data_tokens)}",
-                              fonts["caption"], colors["secondary"]))
-            lines.append((f"來自 {Path(r.source).name}", fonts["caption"], colors["secondary"]))
+                quiet.append(f"同資料夾另有 {r.data_files} 個資料檔，共{describe_tokens(r.data_tokens)}")
+            quiet.append(f"來自 {Path(r.source).name}")
+            for text in quiet:
+                items.append(c.create_text(text_x, y, text=fit_text(fonts["caption"], text, text_w),
+                                           font=fonts["caption"], fill=ink(colors["secondary"]), anchor="nw"))
+                y = c.bbox(items[-1])[3] + round(3 * k)
         else:
             from gui import friendly_error
 
             what, fix = friendly_error(r.error_type)
-            lines = [(f"{Path(r.source).name}：{what}", fonts["strong"], colors["danger"]),
-                     (fix, fonts["body"], colors["secondary"])]
-        y = pad
-        for i, (text, font, color) in enumerate(lines):
-            if r.ok or i == 0:
-                text = fit_text(font, text, text_w)
-                items.append(c.create_text(text_x, y, text=text, font=font, fill=color, anchor="nw"))
-            else:
-                items.append(c.create_text(text_x, y, text=text, font=font, fill=color, anchor="nw", width=text_w))
+            items.append(c.create_text(text_x, y, text=fit_text(fonts["strong"], f"{Path(r.source).name}：{what}", text_w),
+                                       font=fonts["strong"], fill=ink(colors["danger"]), anchor="nw"))
             y = c.bbox(items[-1])[3] + round(3 * k)
-        height = max(y + pad - round(3 * k), pad * 2 + icon_h)
-        if int(c.cget("height")) != height:
-            c.configure(height=height)
-        # Card body under the text; the border carries hover, focus and the drag hint.
-        edge = colors["accent"] if (self.hover or focused) and r.ok else colors["border"]
-        body = rounded_rect(c, 1, 1, w - 1, height - 1, round(10 * k), fill=colors["surface"], outline=edge,
-                            width=max(1, round((2 if focused else 1) * k)))
+            items.append(c.create_text(text_x, y, text=fix, font=fonts["body"], fill=ink(colors["secondary"]),
+                                       anchor="nw", width=text_w))
+            y = c.bbox(items[-1])[3] + round(3 * k)
+        natural = round(max(y - rise + pad - round(3 * k), pad * 2 + icon_h))
+        # Entering cards open up their slot as they fade in, so the list below slides rather than jumps.
+        height = max(1, round(natural * enter)) if moves else natural
+        shadow_gap = round(2 * k)
+        if int(c.cget("height")) != height + shadow_gap:
+            c.configure(height=height + shadow_gap)
+        # Card body: hover and focus raise it (a soft shadow) and give it the accent edge.
+        surface = blend(colors["surface"], colors["border"], 0.45 * press)  # pressed: a touch darker
+        body_bottom = natural - 1
+        if raised:
+            shade = blend(bg, "#000000", 0.35 if self.panel.app.appearance == "dark" else 0.07)
+            shadow = rounded_rect(c, 2, 1 + shadow_gap + rise, w - 2, body_bottom + shadow_gap + rise, round(10 * k),
+                                  fill=ink(shade), outline="")
+            c.tag_lower(shadow)
+        edge = colors["accent"] if raised else colors["border"]
+        body = rounded_rect(c, 1, 1 + rise, w - 1, body_bottom + rise, round(10 * k), fill=ink(surface),
+                            outline=ink(edge), width=max(1, round((2 if focused else 1) * k)))
         c.tag_lower(body)
+        if raised:
+            c.tag_lower(shadow)
         # The file icon: a page with a folded corner, labelled MD; or an alert mark.
-        ix, iy = pad, (height - icon_h) / 2
-        ink = colors["accent"] if r.ok else colors["danger"]
+        ix, iy = pad, (natural - icon_h) / 2 + rise
+        icon = ink(colors["accent"] if r.ok else colors["danger"])
         fold, stroke = round(9 * k), max(1, round(1.5 * k))
         c.create_line(ix, iy, ix + icon_w - fold, iy, ix + icon_w, iy + fold, ix + icon_w, iy + icon_h, ix, iy + icon_h,
-                      ix, iy, fill=ink, width=stroke, joinstyle="round")
-        c.create_line(ix + icon_w - fold, iy, ix + icon_w - fold, iy + fold, ix + icon_w, iy + fold, fill=ink, width=stroke)
-        c.create_text(ix + icon_w / 2, iy + icon_h * 0.62, text="MD" if r.ok else "!", fill=ink,
+                      ix, iy, fill=icon, width=stroke, joinstyle="round")
+        c.create_line(ix + icon_w - fold, iy, ix + icon_w - fold, iy + fold, ix + icon_w, iy + fold, fill=icon, width=stroke)
+        c.create_text(ix + icon_w / 2, iy + icon_h * 0.62, text="MD" if r.ok else "!", fill=icon,
                       font=fonts["caption"] if r.ok else fonts["strong"])
+        if press and moves:  # scale(0.97) about the card's centre
+            factor = 1 - (1 - PRESS_SCALE) * press
+            c.scale("all", w / 2, natural / 2 + rise, factor, factor)
 
     # ----- actions --------------------------------------------------------- #
     def _drag_init(self, _event):
@@ -600,9 +750,10 @@ class ResultCard:
         win = self.panel.win
         win.clipboard_clear()
         win.clipboard_append(text)
-        self.panel.status = ""
-        self.panel.results_label.configure(text=f"已複製 {self.result.output.name}")
-        win.after(2500, lambda: self.panel.results_label.configure(text="轉換結果"))
+        # Often keyboard-initiated (Ctrl+Shift+C): an instant state change, no motion.
+        label = self.panel.results_label
+        label.configure(text=f"✓ 已複製 {self.result.output.name}", foreground=self.panel.colors["success"])
+        win.after(2500, lambda: label.winfo_exists() and label.configure(text="轉換結果", foreground=""))
 
     def copy_path(self) -> None:
         if self.result.ok:

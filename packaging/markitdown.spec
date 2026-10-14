@@ -26,7 +26,7 @@ datas += [(os.path.join(ROOT, "app", "assets"), "assets")]
 hiddenimports = []
 # Converters are imported dynamically inside try/except blocks.
 hiddenimports += collect_submodules("markitdown")
-hiddenimports += ["convert", "xlsx_converter", "xlsx_compact", "excel_recalc", "gui", "panel", "sv_ttk"]
+hiddenimports += ["convert", "xlsx_converter", "xlsx_compact", "excel_recalc", "gui", "panel", "motion", "sv_ttk"]
 if sys.platform == "win32":  # Excel automation for --xlsx-recalc
     hiddenimports += ["win32com", "win32com.client", "pythoncom", "pywintypes"]
 
