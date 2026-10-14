@@ -11,12 +11,11 @@ module.exports = (h) => {
 
   const children = [
     // ----- cover
-    raw('<div class="cover"><div class="t1">MarkItDown 轉換器</div><div class="t2">使用說明書</div><div class="t3">把 Excel、Word、PDF 轉成 Claude 好讀、又省 token 的檔案</div><div class="meta">適用版本：v1.7.0<br>下載：https://github.com/hsu19970520/blank-app/releases/latest</div></div>',
+    raw('<div class="cover"><div class="t1">MarkItDown 轉換器</div><div class="t2">使用說明書</div><div class="t3">把 Excel、Word、PDF 轉成 Claude 好讀、又省 token 的檔案</div><div class="meta">適用版本：v1.7.0</div></div>',
       new Paragraph({ spacing: { before: 1800, after: 200 }, children: [run("MarkItDown 轉換器", { size: 56, bold: true, color: ACCENT })] })),
     new Paragraph({ spacing: { after: 120 }, children: [run("使用說明書", { size: 40, bold: true })] }),
     new Paragraph({ spacing: { after: 600 }, children: [run("把 Excel、Word、PDF 轉成 Claude 好讀、又省 token 的檔案", { size: 26, color: MUTED })] }),
-    new Paragraph({ children: [run("適用版本：v1.7.0", { color: MUTED })], spacing: { after: 60 } }),
-    new Paragraph({ children: [run("下載：https://github.com/hsu19970520/blank-app/releases/latest", { color: MUTED })], spacing: { after: 600 } }),
+    new Paragraph({ children: [run("適用版本：v1.7.0", { color: MUTED })], spacing: { after: 600 } }),
     ...box([
       [b("三句話看懂")],
       "1. 把 Excel 拖進「快速轉換面板」，轉好的檔案會變成一張卡片。",

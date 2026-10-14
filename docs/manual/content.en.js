@@ -21,12 +21,11 @@ module.exports = (h) => {
 
   const children = [
     // ----- cover
-    raw('<div class="cover"><div class="t1">MarkItDown Converter</div><div class="t2">User Guide</div><div class="t3">Turn Excel, Word and PDF files into something Claude reads easily, with fewer tokens</div><div class="meta">Version: v1.7.0<br>Download: https://github.com/hsu19970520/blank-app/releases/latest</div></div>',
+    raw('<div class="cover"><div class="t1">MarkItDown Converter</div><div class="t2">User Guide</div><div class="t3">Turn Excel, Word and PDF files into something Claude reads easily, with fewer tokens</div><div class="meta">Version: v1.7.0</div></div>',
       new Paragraph({ spacing: { before: 1800, after: 200 }, children: [run("MarkItDown Converter", { size: 56, bold: true, color: ACCENT })] })),
     new Paragraph({ spacing: { after: 120 }, children: [run("User Guide", { size: 40, bold: true })] }),
     new Paragraph({ spacing: { after: 600 }, children: [run("Turn Excel, Word and PDF files into something Claude reads easily, with fewer tokens", { size: 26, color: MUTED })] }),
-    new Paragraph({ children: [run("Version: v1.7.0", { color: MUTED })], spacing: { after: 60 } }),
-    new Paragraph({ children: [run("Download: https://github.com/hsu19970520/blank-app/releases/latest", { color: MUTED })], spacing: { after: 600 } }),
+    new Paragraph({ children: [run("Version: v1.7.0", { color: MUTED })], spacing: { after: 600 } }),
     ...box([
       [b("The short version")],
       "1. Drag a file into the Quick Convert panel. The converted file appears as a card.",
