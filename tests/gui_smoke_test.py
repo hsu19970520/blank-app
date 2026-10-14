@@ -27,6 +27,14 @@ sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 
+# The Windows console may not be UTF-8: never let a check's text crash the run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+
 def grab(path: Path, bbox=None) -> None:
     try:
         from PIL import ImageGrab
@@ -173,7 +181,7 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
     from motion import EASE_IN_OUT, EASE_OUT, Motion, blend
 
     samples = [i / 100 for i in range(101)]
-    check("easing curves run 0 → 1 without turning back",
+    check("easing curves run 0 -> 1 without turning back",
           all(f(0) == 0 and f(1) == 1 and all(f(b) >= f(a) for a, b in zip(samples, samples[1:]))
               for f in (EASE_OUT, EASE_IN_OUT)))
     check("ease-out is front-loaded, ease-in-out starts slowly", EASE_OUT(0.25) > 0.7 and EASE_IN_OUT(0.25) < 0.1)
