@@ -76,6 +76,7 @@
 | `SHA256SUMS.txt` | 檔案雜湊值，可用來驗證下載內容。 |
 | `MarkItDown-Guide-zh-TW.pdf` | **使用說明書**（PDF，直接閱讀或列印）。 |
 | `MarkItDown-Guide-zh-TW.docx` | 使用說明書（Word，可以依團隊需要修改）。 |
+| `MarkItDown-Guide-en.pdf` / `.docx` | English user guide (PDF / Word). |
 
 ## markitdown.exe 用法
 

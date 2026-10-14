@@ -1,4 +1,4 @@
-@page { size: A4; margin: 20mm 20mm 22mm; @bottom-center { content: "MarkItDown 轉換器 使用說明書 v1.7.0 · 第 " counter(page) " 頁"; font-size: 8.5pt; color: #5D5D5D; } }
+@page { size: A4; margin: 20mm 20mm 22mm; @bottom-center { content: __FOOTER__; font-size: 8.5pt; color: #5D5D5D; } }
 body { font-family: "Microsoft JhengHei", "WenQuanYi Zen Hei", sans-serif; font-size: 10.5pt; line-height: 1.65; color: #1C1C1C; }
 .cover { padding-top: 70mm; }
 .cover .t1 { font-size: 30pt; font-weight: bold; color: #005FB8; }
@@ -21,6 +21,6 @@ figure { margin: 8pt 0 10pt; text-align: center; page-break-inside: avoid; }
 figure img { border: 1px solid #DDDDDD; }
 figcaption { font-size: 8.5pt; color: #5D5D5D; margin-top: 3pt; }
 code { font-family: Consolas, "DejaVu Sans Mono", monospace; background: #F0F0F0; padding: 0 2pt; font-size: 9.5pt; }
-.q { color: #005FB8; font-weight: bold; margin: 10pt 0 2pt; }
+.q { color: #005FB8; font-weight: bold; margin: 10pt 0 2pt; page-break-after: avoid; break-after: avoid; }
 pre { font-family: Consolas, "DejaVu Sans Mono", "WenQuanYi Zen Hei Mono", monospace; font-size: 8.5pt; background: #F5F5F5; padding: 6pt 10pt; margin: 6pt 0 2pt; white-space: pre; page-break-inside: avoid; }
 .note { font-size: 9pt; color: #5D5D5D; }

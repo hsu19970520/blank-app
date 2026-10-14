@@ -89,6 +89,8 @@ jobs:
             dist/SHA256SUMS.txt
             docs/MarkItDown-Guide-zh-TW.pdf
             docs/MarkItDown-Guide-zh-TW.docx
+            docs/MarkItDown-Guide-en.pdf
+            docs/MarkItDown-Guide-en.docx
           if-no-files-found: error
 
       - name: Upload GUI screenshots
@@ -116,3 +118,5 @@ jobs:
             dist/SHA256SUMS.txt
             docs/MarkItDown-Guide-zh-TW.pdf
             docs/MarkItDown-Guide-zh-TW.docx
+            docs/MarkItDown-Guide-en.pdf
+            docs/MarkItDown-Guide-en.docx
