@@ -37,8 +37,21 @@ function box(paras, fill = NOTE_BG, edge = ACCENT) {
   })).concat([new Paragraph({ children: [], spacing: { after: 120 } })]);
 }
 
+function snippet(lines, note) {
+  H.push(`<pre>${lines.map(esc).join("\n")}</pre>` + (note ? `<p class="note">${esc(note)}</p>` : ""));
+  const mono = { ascii: "Consolas", hAnsi: "Consolas", eastAsia: "Microsoft JhengHei", cs: "Consolas" };
+  const out = lines.map((t, i) => new Paragraph({
+    children: [new TextRun({ text: t, font: mono, size: 17 })],
+    shading: { type: ShadingType.CLEAR, fill: "F5F5F5", color: "auto" },
+    spacing: { after: 0, before: i === 0 ? 80 : 0, line: 260 }, indent: { left: 160, right: 160 },
+  }));
+  out.push(new Paragraph({ spacing: { before: 60, after: 160 }, children: note ? [new TextRun({ text: note, font: FONT, size: 18, color: MUTED })] : [] }));
+  return out;
+}
+
 function table(widths, rows) {
-  H.push("<table>" + rows.map((cells, r) => "<tr>" + cells.map((c) => (r === 0 ? `<th>${html(c)}</th>` : `<td>${html(c)}</td>`)).join("") + "</tr>").join("") + "</table>");
+  const total = widths.reduce((a, c) => a + c, 0);
+  H.push("<table><colgroup>" + widths.map((w) => `<col style="width:${(100 * w / total).toFixed(1)}%">`).join("") + "</colgroup>" + rows.map((cells, r) => "<tr>" + cells.map((c) => (r === 0 ? `<th>${html(c)}</th>` : `<td>${html(c)}</td>`)).join("") + "</tr>").join("") + "</table>");
   const border = { style: BorderStyle.SINGLE, size: 4, color: BORDER };
   const borders = { top: border, bottom: border, left: border, right: border };
   return new Table({
@@ -87,7 +100,7 @@ const children = [
     [b("三句話看懂")],
     "1. 把 Excel 拖進「快速轉換面板」，轉好的檔案會變成一張卡片。",
     "2. 把卡片拖進 Claude 的對話框。大檔案的卡片是小小的「索引」，先只給這張。",
-    "3. 省 token 靠的是「少上傳」：先給索引，需要明細時 Claude 會告訴你要哪個檔；預測瀑布表按「只轉最新一版」。",
+    "3. 省 token 靠的是「少上傳」：先給索引，需要明細時 Claude 會告訴你要哪個檔。",
   ]),
   raw('<div class="pb"></div>', new Paragraph({ children: [new PageBreak()] })),
 
@@ -100,7 +113,7 @@ const children = [
   bullet([b("逐格核對"), run("：寫出檔案前，程式會把每一格讀回來和 Excel 比對，有一格不同就不產生結果。")]),
   ...box([
     [b("最重要的觀念")],
-    "把大檔案「全部」上傳，花的 token 跟直接丟 Excel 差不多，因為數字本身就佔 token，換什麼格式都壓不小。真正省 token 的方法是「少上傳」：先給索引、只給需要的工作表、用關鍵字或「只轉最新一版」篩選。第 4 章有完整做法。",
+    "把大檔案「全部」上傳，花的 token 跟直接丟 Excel 差不多，因為數字本身就佔 token，換什麼格式都壓不小。真正省 token 的方法是「少上傳」：先給索引、只給需要的工作表、用關鍵字篩選，或只轉最新的版本。第 4 章有完整做法，第 7 章有一個從頭到尾的實際例子。",
   ], WARN_BG, "C27C0E"),
 
   // ----- 2
@@ -122,7 +135,7 @@ const children = [
   ...image("panel_empty.png", 260, "圖 1　面板剛打開時：把檔案拖到虛線框裡"),
   h2("3.3 把結果交給 Claude"),
   p([run("每個結果會變成一張卡片。"), b("把卡片直接拖進 Claude Desktop 的對話框"), run("，就會附加那個檔案。不方便拖曳時，在卡片上按兩下可以開啟檔案；按右鍵可以「複製內容」直接貼到 Claude，或「開啟檔案位置」從檔案總管拖。")]),
-  ...image("panel_results.png", 280, "圖 2　轉換結果：上面是大檔案的索引卡片，下面是小檔案的卡片"),
+  ...image("panel_results.png", 280, "圖 2　轉換結果（範例檔）：上面是大檔案的索引卡片，下面是小檔案的卡片"),
   h2("3.4 看懂卡片"),
   table([2600, 6426], [
     ["卡片上的文字", "意思"],
@@ -132,14 +145,13 @@ const children = [
     ["先拖這張就好，Claude 會說還要哪個檔", "大檔案只要先給索引，Claude 需要明細時會告訴你檔名。"],
     ["同資料夾另有 N 個資料檔", "資料檔在 <檔名>_md 資料夾裡，需要時再上傳指定的那一個。"],
     ["⚠ 全部約 N 萬 token，太大，別整包上傳", "超過一次對話適合處理的量，不要把整個資料夾打包上傳。"],
-    ["→ 只轉最新一版 · 約 N token", "預測瀑布表這類檔案才會出現（見 3.5）。按一下產生只有最新版本的小檔。"],
+    ["→ 只轉最新一版 · 約 N token", "檔案有「版本欄」時才會出現（見 3.5）。按一下產生只有最新版本的小檔。"],
     ["來自 ○○.xlsx", "原始檔案。篩選出來的小檔會加註「只含最新 1 版」。"],
   ]),
-  h2("3.5 只轉最新一版（預測瀑布表）"),
-  p("有些 Excel 每週會累積一個新版本，例如預測瀑布表：同一個料號在每一版都有一列。程式會自動找出這種「版本欄」，在卡片上提供「只轉最新一版」、「只轉最新 2 版」的連結，並寫出大約多少 token。"),
-  p("按一下連結，就會另外產生一個小檔（檔名後面加「_最新1版」），原本的完整版不會被覆蓋。只想問「這週的預測」或「這週和上週差多少」時，用這個小檔就夠了。"),
-  ...image("panel_latest.png", 280, "圖 3　按「只轉最新一版」後，最上面多了一張只含最新版本的小檔卡片"),
-  p([run("說明：PO 日期、出貨日期這類每天筆數不一樣的日期欄，不會被當成版本欄。只有大檔案（全部超過約 3 萬 token）才會出現這兩個連結。")], { }),
+  h2("3.5 只轉最新版本（有版本欄的檔案）"),
+  p("有些 Excel 會一期一期累積資料，例如每週的預測快照、每月的庫存快照：同一個項目在每一期都有一列，並用一欄日期標示是哪一期。程式會自動找出這種「版本欄」。"),
+  p("如果檔案很大（全部超過約 3 萬 token），卡片上會出現「只轉最新一版」、「只轉最新 2 版」的連結，並寫出大約多少 token。按一下就會另外產生一個小檔（檔名後面加「_最新1版」），原本的完整版不會被覆蓋。只需要最新一期，或想比較最近兩期時，用這個小檔就夠了。"),
+  p("訂單日期、出貨日期這類每天筆數不一樣的日期欄，不會被當成版本欄；沒有版本欄的檔案也不會出現這兩個連結。實際例子請看第 7 章。"),
   h2("3.6 面板底部"),
   bullet([b("設定說明"), run("：目前的 Excel 輸出方式和儲存位置。")]),
   bullet([b("浮在其他視窗上方"), run("：預設開啟，方便把卡片拖到 Claude；不需要時可以關掉。")]),
@@ -152,7 +164,7 @@ const children = [
     ["小檔案（卡片上沒有「先拖這張就好」）", "直接拖卡片進 Claude", "就是卡片上的 token 數"],
     ["大檔案，問整體狀況、合計、有哪些欄位", "只拖索引卡片", "幾千 token"],
     ["大檔案，需要某張工作表的明細", "先給索引；Claude 說要哪個檔，再從 _md 資料夾上傳那一個", "每個資料檔最多約 10 萬"],
-    ["預測瀑布表，問這週或這週和上週", "按「只轉最新一版」或「只轉最新 2 版」", "通常是全部的 1/10 以下"],
+    ["檔案有版本欄，只需要最新一期或最近兩期", "按卡片上的「只轉最新一版」或「只轉最新 2 版」", "只剩最近幾期的量"],
     ["只問某個料號或客戶", "在「轉換選項…」設定關鍵字篩選後重新轉", "通常幾千到幾萬"],
   ]),
   p("", { spacing: { after: 160 } }),
@@ -196,7 +208,65 @@ const children = [
   bullet("儲存格的註解附在該工作表資料的最後面。"),
 
   // ----- 7
-  h1("7. 主視窗與選項"),
+  h1("7. 使用範例：預測瀑布表"),
+  p("這一章用一份範例檔，從頭到尾說明程式怎麼轉檔、轉出來的檔案怎麼用。範例檔「範例 FCST Waterfall.xlsx」的內容是隨機產生的測試資料。其他種類的 Excel，例如週報、出貨紀錄、庫存表，也是同樣的流程；差別只在 7.5 節的「版本欄」只有一期一期累積的檔案才會有。"),
+  h2("7.1 範例檔長什麼樣子"),
+  bullet("一張工作表「By MPN x Site」，2,240 列 × 31 欄。"),
+  bullet("A～D 欄是料號（MPN）、地點（Site）、品牌（Brand）、預測版本（Version）；E～AD 欄是 26 週的需求數量，AE 欄是合計（TTL）。"),
+  bullet("每週會新增一個預測版本，160 個料號在每一版都各有一列。目前累積了 14 版（2026/07/06 ～ 2026/10/05）。"),
+  h2("7.2 拖進面板後，程式做了什麼"),
+  step([b("找出表頭"), run("：第 1 列是欄名（MPN、Site…W01…TTL）。表頭不在第 1 列的檔案，程式會依自動篩選、樞紐分析表或凍結窗格判斷。")], "example"),
+  step([b("讀出每一格並逐格核對"), run("：數值保留完整精度、日期寫成完整格式；寫出檔案前把每一格讀回來和 Excel 比對。")], "example"),
+  step([b("算出每一欄的統計"), run("：最小值、最大值、合計，以及文字欄最常出現的值，寫進索引。")], "example"),
+  step([b("決定要不要拆檔"), run("：全部約 19.5 萬 token，超過 3 萬，所以拆成一個索引和 2 個資料檔（每個 10 萬 token 以內）。")], "example"),
+  step([b("找出版本欄"), run("：D 欄的值全是日期，14 個日期各有 160 列，幾乎每一列都有值，判定為版本欄；於是卡片上多了「只轉最新一版 · 約 15,000 token」和「只轉最新 2 版 · 約 28,900 token」。")], "example"),
+  p("轉出來的檔案放在原檔旁邊的資料夾「範例 FCST Waterfall_md」：", { spacing: { before: 120, after: 80 } }),
+  table([5000, 4026], [
+    ["檔案", "大約 token"],
+    ["00_索引與邏輯.md（卡片代表的就是這個檔）", "1,300"],
+    ["01_By MPN x Site_第1部分.md（Excel 第 1～1,168 列）", "100,000"],
+    ["01_By MPN x Site_第2部分.md（其餘的列）", "93,000"],
+  ]),
+  h2("7.3 索引裡寫了什麼"),
+  p("索引不含明細資料，只有讓 Claude 判斷「需要什麼」的資訊。以下是範例檔索引的一部分："),
+  table([700, 1500, 900, 1000, 4926], [
+    ["欄", "名稱", "類型", "非空", "統計（程式算好的）"],
+    ["A", "MPN", "文字", "2,240", "160 個不同值；最多的是 PN-0000×14、PN-0001×14…"],
+    ["B", "Site", "文字", "2,240", "VN×1260、TW×980"],
+    ["C", "Brand", "文字", "2,240", "Brand C×826、Brand A×770、Brand B×644"],
+    ["D", "Version", "文字", "2,240", "14 個不同值；2026/07/06×160、2026/07/13×160…"],
+    ["E:AE", "W01 … TTL（27 欄）", "數值", "60,480", "整段最小 0，最大 887361；各欄合計：E 33384853、F 32885195…"],
+  ]),
+  p("同一頁還會寫出："),
+  ...box(["版本欄：D 欄（Version），14 個版本（2026/07/06 ～ 2026/10/05），每版 160 列。同一個項目在每一版都有一列，跨版本相加沒有意義；只需要最新資料時，轉換器可以只轉最新一版或兩版。"]),
+  p("所以光看索引，Claude 就知道這份檔案有哪些料號、品牌和地點的分布、有幾個版本，也知道不能把不同版本的數字加在一起。"),
+  h2("7.4 資料檔裡寫了什麼"),
+  p("資料檔是 Tab 分隔的完整資料。以下是第 1 部分開頭的幾行（實際檔案裡是 Tab 字元，這裡用 │ 表示，只列前幾欄）："),
+  ...snippet([
+    "列│A      │B   │C      │D         │E    │F    │…│AE",
+    "1 │MPN    │Site│Brand  │Version   │W01  │W02  │…│TTL",
+    "2 │PN-0000│TW  │Brand C│2026/07/06│0    │79324│…│539564",
+    "3 │PN-0001│TW  │Brand B│2026/07/06│0    │0    │…│353933",
+  ], "每一行開頭是 Excel 列號，所以 Claude 可以指出「By MPN x Site!F2 是 79324」這樣的確切位置。"),
+  h2("7.5 版本欄與「只轉最新一版」"),
+  p("程式判斷一欄是不是版本欄，要同時符合三個條件："),
+  bullet("這一欄的值都是日期（例如 2026/10/05、2026-10-05 或 2026/10）。"),
+  bullet("每個日期的列數差不多（每一版都包含同一批項目）。訂單日期、出貨日期每天筆數差很多，所以不會被選上。"),
+  bullet("幾乎每一列都有值，而且至少有 3 個不同日期。"),
+  p("在卡片上按「只轉最新一版」，就會產生「範例 FCST Waterfall_最新1版.md」：只保留表頭和 2026/10/05 這一版的 160 列，約 15,400 token，而且是單一檔案，可以直接整個拖進 Claude。索引開頭會註明「只保留最新 1 版的列」，各欄的統計仍是整張工作表的結果。"),
+  ...image("panel_latest.png", 280, "圖 3　按「只轉最新一版」後，最上面多了一張只含最新版本的小檔卡片"),
+  h2("7.6 依問題決定要給 Claude 什麼"),
+  table([3400, 3626, 2000], [
+    ["想問 Claude 的問題", "要給什麼", "大約 token"],
+    ["有哪些料號、品牌？各週需求合計是多少？", "只給索引卡片", "1,300"],
+    ["PN-0012 這 14 版的預測怎麼變化？", "用關鍵字「PN-0012」篩選後轉檔", "2,700"],
+    ["這週（最新一版）的預測是多少？", "按「只轉最新一版」", "15,400"],
+    ["這週和上週比，哪些料號變化最大？", "按「只轉最新 2 版」", "29,300"],
+    ["全部 14 版的完整趨勢分析", "先給索引，再依 Claude 指示分次上傳 2 個資料檔", "195,000（分兩次）"],
+  ]),
+  p("同一份檔案，依問題不同，交給 Claude 的量可以從 19.5 萬 token 降到幾千 token。其他種類的檔案也一樣：先給索引，再依問題用關鍵字篩選，或只上傳需要的工作表。", { spacing: { before: 120 } }),
+
+  h1("8. 主視窗與選項"),
   p("主視窗適合一次轉換很多檔案或整個資料夾，也可以預覽轉換結果。"),
   ...image("main_empty.png", 520, "圖 4　主視窗：上方加入檔案、資料夾或網址，按「轉換」"),
   p([run("主視窗右上角的「"), b("選項"), run("」選單：")]),
@@ -214,7 +284,7 @@ const children = [
   p("面板和主視窗使用同一組選項。", { spacing: { before: 120 } }),
 
   // ----- 8
-  h1("8. 常見問題"),
+  h1("9. 常見問題"),
   ...[
     ["Windows 說「已保護您的電腦」，不讓我開？", "按「其他資訊」再按「仍要執行」。程式沒有數位簽章，所以第一次會被提醒。"],
     ["卡片拖不進 Claude？", "在卡片上按右鍵「開啟檔案位置」，從檔案總管把檔案拖進 Claude；或按右鍵「複製內容」，直接貼到對話框。"],
@@ -230,12 +300,12 @@ const children = [
   ]),
 
   // ----- 9
-  h1("9. 進階：命令列"),
+  h1("10. 進階：命令列"),
   p("熟悉命令列的人可以直接在「命令提示字元」或 PowerShell 使用（完整選項請執行 markitdown.exe --help）："),
   table([4200, 4826], [
     ["指令", "說明"],
     [[code("markitdown.exe 報表.xlsx --out-dir 輸出")], "轉一個檔案到「輸出」資料夾"],
-    [[code("markitdown.exe 報表.xlsx --xlsx-latest 1")], "只保留最新一版（預測瀑布表）"],
+    [[code("markitdown.exe 報表.xlsx --xlsx-latest 1")], "只保留最新一版（有版本欄的檔案）"],
     [[code("markitdown.exe 報表.xlsx --xlsx-rows-containing PN-0001")], "只保留含這個料號的列（可重複指定）"],
     [[code("markitdown.exe 報表.xlsx --xlsx-format readable")], "改用完整表格版"],
     [[code("markitdown.exe D:\\資料夾 -r --out-dir D:\\輸出")], "整個資料夾（含子資料夾）"],
@@ -256,7 +326,7 @@ const doc = new Document({
   },
   numbering: { config: [
     { reference: "bullets", levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 480, hanging: 280 } } } }] },
-    ...["steps", "rules", "project"].map((reference) => ({ reference, levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 480, hanging: 360 } } } }] })),
+    ...["steps", "rules", "project", "example"].map((reference) => ({ reference, levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 480, hanging: 360 } } } }] })),
   ] },
   sections: [{
     properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } },
