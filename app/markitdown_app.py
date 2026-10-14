@@ -2,6 +2,7 @@
 """MarkItDown desktop app: the entry point of markitdown.exe.
 
 * Double-click the exe            -> graphical converter (GUI)
+* `markitdown.exe --panel`        -> only the small Quick Convert panel (drop in, drag out to Claude)
 * Drag files/folders onto the exe -> converts them to .md next to the originals
 * Run it from a terminal          -> full CLI (see `markitdown.exe --help`)
 
@@ -113,6 +114,18 @@ def run_gui(initial_inputs=()) -> int:
     return 0
 
 
+def run_panel(initial_inputs=()) -> int:
+    """Only the floating Quick Convert panel; its "選項…" button brings up the main window."""
+    enable_high_dpi()
+    root, app = create_window()
+    root.withdraw()
+    panel = app.show_panel(standalone=True)
+    if initial_inputs:
+        panel.add(list(initial_inputs))
+    root.mainloop()
+    return 0
+
+
 def create_window(initial_inputs=()):
     import gui
 
@@ -130,6 +143,11 @@ def main() -> int:
         if from_explorer:
             hide_console()
         return run_gui(args[1:])
+
+    if args and args[0] == "--panel":
+        if from_explorer:
+            hide_console()
+        return run_panel(args[1:])
 
     if not args:
         stdin_is_pipe = sys.stdin is not None and not sys.stdin.isatty()

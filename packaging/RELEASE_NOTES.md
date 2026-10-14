@@ -1,6 +1,15 @@
 把 Microsoft [MarkItDown](https://github.com/microsoft/markitdown) 打包成 Windows 執行檔和 Claude skill，可以把 PDF、Word、PowerPoint、Excel、HTML、CSV、JSON、XML、EPUB、ZIP、Outlook .msg、Jupyter Notebook 和網頁（包含 YouTube、Wikipedia）轉成 Markdown。
 
-## 這個版本的更新（1.4.0）
+## 這個版本的更新（1.5.0）
+
+- **快速轉換面板**：一個浮在其他視窗上方的小面板，讓 Excel 到 Claude 的流程變成「拖進來、拖出去」：
+  - 把檔案拖進面板就會開始轉換，轉換中也可以繼續拖檔案進來。
+  - 每個結果會變成一張檔案卡片，顯示大約需要多少 token，Excel 精簡版還會標示「已逐格核對」。把卡片直接拖進 Claude Desktop 的對話框就能附加檔案。大型 Excel 的卡片是索引檔，卡片上會寫出同資料夾還有幾個資料檔、共約多少 token。
+  - 不方便拖曳時：在卡片上按兩下可以開啟檔案；按右鍵可以複製內容、複製路徑或開啟檔案位置；按「選擇檔案…」可以挑選檔案。
+  - 開啟方式：主視窗的「檢視 › 快速轉換面板」（`Ctrl+Shift+P`）、主視窗空白時的連結，或 `markitdown.exe --panel`。
+  - 面板沿用主視窗的選項；按「選項…」會打開主視窗。「浮在其他視窗上方」可以關閉。
+
+### 1.4.0
 
 - **Excel 預設改為「給 Claude 的精簡版」**，目標是省 token、資料仍然 100% 正確：
   - **`00_索引與邏輯.md`**：每張工作表的欄位、類型、非空格數，以及由程式精確算好的最小值、最大值和合計（有「列分類」欄，例如 Demand/ETD/Balance 時，合計會依分類分開算）。另外列出每欄的公式寫法、工作表之間的資料流向、篩選、隱藏、驗證和樞紐分析表，以及每個資料檔大約要多少 token。Claude 先讀這個小檔，就知道要看哪些資料。

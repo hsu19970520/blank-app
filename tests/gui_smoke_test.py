@@ -140,6 +140,36 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
     check("stop ends the run", "已停止" in app.status_text.get(), app.status_text.get())
     check("stopped run leaves items pending", any(app.items[i].status == "pending" for i in app._leaf_iids()))
 
+    # Quick Convert panel: drop files in, get draggable result cards out.
+    panel = app.show_panel()
+    pump(0.3)
+    check("panel opens with a large well", panel.well.winfo_height() > 150 and not panel.holder.winfo_ismapped())
+    panel.add([str(samples / "sheet.xlsx"), str(samples / "page.html"), str(missing)])
+    wait(lambda: not panel.busy, "the panel to convert")
+    pump(0.3)
+    names = [c.result.output.name if c.result.ok else "error" for c in panel.cards]
+    check("panel shows newest result first", names == ["error", "page.md", "sheet.md"], str(names))
+    check("well shrinks to one row once there are results", panel.well.winfo_height() < 100 and panel.holder.winfo_ismapped())
+    sheet_card = panel.cards[-1]
+    check("Excel card carries a token estimate", sheet_card.result.tokens > 0 and sheet_card.result.excel)
+
+    class FakeDnd:
+        COPY, DND_FILES = "copy", "DND_Files"
+
+    panel.dnd = FakeDnd
+    drag = sheet_card._drag_init(None)
+    check("dragging a card hands over its .md file", drag[1] == "DND_Files" and drag[2][0].endswith("sheet.md"), str(drag))
+    panel.dnd = app.dnd
+    sheet_card.copy()
+    check("copy puts the card's Markdown on the clipboard", "MarkItDownSmoke" in root.clipboard_get())
+    shot("5_panel")
+    panel.clear()
+    pump(0.2)
+    check("clearing brings the large well back", not panel.holder.winfo_ismapped())
+    panel.close()
+    pump(0.2)
+    check("closing the panel keeps the main window", panel.win.state() == "withdrawn" and root.winfo_exists())
+
     app.tree.selection_set(app._leaf_iids())
     app.remove_selected()
     pump(0.3)
@@ -149,19 +179,23 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
 
 
 def test_exe(exe: str, shots: Path | None, wait: float = 25) -> list:
-    proc = subprocess.Popen([str(Path(exe).resolve()), "--gui"])
-    try:
-        time.sleep(wait)
-        if proc.poll() is not None:
-            return [f"{exe} --gui exited early with code {proc.returncode}"]
-        print(f"PASS  {exe} --gui is still running after {wait:.0f}s")
-        if shots is not None:
-            grab(shots / "exe_gui.png")
-        return []
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+    """The packaged exe starts and stays up, as the main window and as the panel alone."""
+    failures = []
+    for mode in ("--gui", "--panel"):
+        proc = subprocess.Popen([str(Path(exe).resolve()), mode])
+        try:
+            time.sleep(wait)
+            if proc.poll() is not None:
+                failures.append(f"{exe} {mode} exited early with code {proc.returncode}")
+                continue
+            print(f"PASS  {exe} {mode} is still running after {wait:.0f}s")
+            if shots is not None:
+                grab(shots / f"exe{mode.replace('--', '_')}.png")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+    return failures
 
 
 def main() -> int:

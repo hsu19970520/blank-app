@@ -28,6 +28,14 @@
 - 外觀跟著 Windows 的淺色／深色設定自動切換。
 - 常用快速鍵：`Ctrl+O` 加入檔案、`Ctrl+Shift+O` 加入資料夾、`Ctrl+L` 貼上網址、`Ctrl+Enter` 轉換、`Esc` 停止、`Ctrl+Shift+C` 複製 Markdown、`Delete` 移除。也可以在項目上按右鍵操作。
 
+**快速轉換面板**（給 Claude 用最方便）：在主視窗按「檢視 › 快速轉換面板」（`Ctrl+Shift+P`），或用 `markitdown.exe --panel` 直接開啟。這是一個浮在其他視窗上方的小面板：
+
+- 把檔案拖進面板就會開始轉換，轉換中也可以繼續拖檔案進來。
+- 每個結果會變成一張檔案卡片，顯示大約需要多少 token。把卡片直接拖進 Claude Desktop 的對話框就能附加檔案。
+- 大型 Excel 的卡片代表索引檔，同一個資料夾裡有其他資料檔。
+- 不方便拖曳的話，在卡片上按兩下可以開啟檔案；按右鍵可以複製內容、複製路徑或開啟檔案位置。
+- 想每天直接開面板，可以在桌面建立 `markitdown.exe` 的捷徑，然後在捷徑的「目標」後面加上 ` --panel`。
+
 **拖曳轉檔**：把檔案或資料夾拖到 `markitdown.exe` 圖示上，會在原檔旁產生同名的 `.md`。
 
 **命令列**：
@@ -96,6 +104,7 @@ skills/markitdown/scripts/xlsx_compact.py    給 Claude 的精簡版 Excel（索
 skills/markitdown/scripts/excel_recalc.py    用 Microsoft Excel 重新計算（--xlsx-recalc）
 app/markitdown_app.py                 exe 進入點：圖形介面 / 拖曳 / 命令列
 app/gui.py                            圖形介面（Windows 11 風格、淺色／深色）
+app/panel.py                          快速轉換面板（拖進來轉換，把結果卡片拖進 Claude）
 app/assets/                           App 圖示（由 packaging/make_icon.py 產生）
 packaging/markitdown.spec             PyInstaller 設定
 packaging/requirements-build.txt      建置用相依套件（固定版本）

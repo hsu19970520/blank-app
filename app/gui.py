@@ -230,6 +230,7 @@ class ConverterWindow:
         self.log_window = None
         self.run_summary: Dict[str, object] = {}
         self._repaint_pending = False
+        self.panel = None  # the Quick Convert panel, created on first use
 
         self.output_mode = tk.StringVar(value="beside")
         self.output_dir = tk.StringVar()
@@ -341,6 +342,7 @@ class ConverterWindow:
         style.configure("Secondary.TLabel", foreground=c["secondary"])
         style.configure("SecondaryBody.TLabel", foreground=c["secondary"])
         style.configure("Placeholder.TEntry", foreground=c["secondary"])
+        style.configure("Link.Toolbutton", foreground=c["accent"])
         self.tree.tag_configure("pending", foreground=c["secondary"])
         self.tree.tag_configure("working", foreground=c["text"])
         self.tree.tag_configure("failed", foreground=c["danger"])
@@ -371,6 +373,8 @@ class ConverterWindow:
         self._draw_drop_zone()
         if self.log_window is not None:
             self.log_text.configure(background=c["surface"], foreground=c["text"])
+        if self.panel is not None:
+            self.panel.repaint()
 
     # ----- layout ---------------------------------------------------------- #
     def _setup_window(self) -> None:
@@ -412,6 +416,7 @@ class ConverterWindow:
         menubar.add_cascade(label="編輯(E)", underline=3, menu=edit_menu)
 
         view_menu = tk.Menu(menubar, tearoff=False)
+        view_menu.add_command(label="快速轉換面板", accelerator="Ctrl+Shift+P", command=self.show_panel)
         view_menu.add_command(label="轉換紀錄", command=self.show_log)
         menubar.add_cascade(label="檢視(V)", underline=3, menu=view_menu)
 
@@ -519,6 +524,9 @@ class ConverterWindow:
         self.drop_zone = tk.Canvas(list_side, highlightthickness=0, borderwidth=0)
         self.drop_zone.bind("<Configure>", lambda _e: self._draw_drop_zone())
         self.drop_zone_button = ttk.Button(self.drop_zone, text="選擇檔案…", command=self.choose_files)
+        self.drop_zone_panel_button = ttk.Button(self.drop_zone, text="或開啟快速轉換面板（轉好後直接拖進 Claude）",
+                                                 style="Link.Toolbutton",
+                                                 command=self.show_panel)
         paned.add(list_side, weight=2)
 
         preview_side = ttk.Frame(paned, padding=(gap, 0, 0, 0))
@@ -631,6 +639,7 @@ class ConverterWindow:
         r.bind_all("<Control-Return>", lambda _e: self.start())
         r.bind_all("<Control-C>", lambda _e: self.copy_markdown())
         r.bind_all("<Escape>", lambda _e: self.stop())
+        r.bind_all("<Control-P>", lambda _e: self.show_panel())
         self.tree.bind("<Control-a>", lambda _e: (self._select_all(), "break")[1])
 
     # ----- empty state & drag and drop ------------------------------------ #
@@ -667,6 +676,7 @@ class ConverterWindow:
             text="PDF、Word、PowerPoint、Excel、HTML、\nCSV、EPUB、ZIP 等格式都會轉成 Markdown",
         )
         canvas.create_window(cx, cy + 136 * k, window=self.drop_zone_button)
+        canvas.create_window(cx, cy + 180 * k, window=self.drop_zone_panel_button)
 
     def _on_drag_enter(self, event):
         self.dragging = True
@@ -893,7 +903,7 @@ class ConverterWindow:
         targets = self._targets(only)
         if not targets:
             return
-        out_dir = Path(self.output_dir.get()) if self.output_mode.get() == "folder" and self.output_dir.get() else None
+        out_dir = self.output_destination()
         for iid in targets:
             item = self.items[iid]
             item.status, item.output, item.markdown, item.error, item.error_type = "pending", None, None, None, None
@@ -904,16 +914,22 @@ class ConverterWindow:
         self.progress.configure(mode="determinate", maximum=len(targets), value=0)
         self.progress.grid()
         self._refresh()
+        jobs = (targets, out_dir, self.skip_existing.get(), self.keep_data_uris.get(), self.conversion_options())
+        threading.Thread(target=self._worker, args=jobs, daemon=True).start()
+
+    def output_destination(self) -> Optional[Path]:
+        """None = next to each source file."""
+        return Path(self.output_dir.get()) if self.output_mode.get() == "folder" and self.output_dir.get() else None
+
+    def conversion_options(self) -> dict:
         compact = self.xlsx_compact.get() and not self.xlsx_formulas_in_cells.get()
-        options = {
+        return {
             "xlsx_format": "compact" if compact else "readable",
             "xlsx_rows_containing": list(self.xlsx_keywords) if compact else [],
             "xlsx_visible_only": self.xlsx_visible_only.get(),
             "xlsx_formulas": "cells" if self.xlsx_formulas_in_cells.get() else "summary",
             "xlsx_recalc": self.xlsx_recalc.get(),
         }
-        jobs = (targets, out_dir, self.skip_existing.get(), self.keep_data_uris.get(), options)
-        threading.Thread(target=self._worker, args=jobs, daemon=True).start()
 
     def reconvert_selected(self) -> None:
         selected = [i for i in self.tree.selection() if self.items.get(i) and self.items[i].kind in LEAF_KINDS]
@@ -1304,6 +1320,15 @@ class ConverterWindow:
             "以 Microsoft MarkItDown（MIT 授權）為核心，把文件與網頁轉成 Markdown。",
             parent=self.root,
         )
+
+    def show_panel(self, standalone: bool = False):
+        """The Quick Convert panel: drop files in, drag the results into Claude."""
+        if self.panel is None or not self.panel.win.winfo_exists():
+            from panel import QuickPanel
+
+            self.panel = QuickPanel(self, standalone=standalone)
+        self.panel.show()
+        return self.panel
 
     def _on_close(self) -> None:
         self.stop_event.set()
