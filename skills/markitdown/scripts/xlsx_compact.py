@@ -38,8 +38,13 @@ from xlsx_converter import (
 )
 
 INDEX_NAME = "00_索引與邏輯.md"
-DEFAULT_BUDGET = 150_000  # estimated tokens: up to this, everything goes in one file
+SMALL_BUDGET = 30_000  # estimated tokens: a whole workbook up to this stays in one file
+DEFAULT_BUDGET = 150_000  # a filtered extract (keyword / latest versions) up to this stays in one file
 DEFAULT_PART_BUDGET = 100_000  # estimated tokens per data file when splitting
+CONVERSATION_BUDGET = 150_000  # more than this is too much to hand Claude in one conversation
+
+# A "version" column: snapshot dates such as 2026/06/15, 2026-06-15 or 2026/06.
+_DATE_LIKE = re.compile(r"^(\d{4})[/\-.](\d{1,2})(?:[/\-.](\d{1,2}))?(?:[ T].*)?$")
 
 FORMAT_NOTE = (
     "資料格式：每張工作表是一段 Tab 分隔的資料。第一欄是 Excel 列號，列號後面有 `h` 表示該列在 Excel 中是隱藏的"
@@ -100,12 +105,30 @@ def safe_filename(name: str) -> str:
 # --------------------------------------------------------------------------- #
 @dataclass
 class CompactOptions:
-    budget: int = DEFAULT_BUDGET
+    budget: Optional[int] = None  # one file up to this; None = SMALL_BUDGET, or DEFAULT_BUDGET when filtered
     part_budget: int = DEFAULT_PART_BUDGET
     visible_only: bool = False
     contains: List[str] = field(default_factory=list)  # keep only rows containing one of these
+    latest_versions: int = 0  # keep only rows of the newest N values of each sheet's version column
     header_rows: Dict[str, int] = field(default_factory=dict)
     recalc_note: str = ""
+
+
+@dataclass
+class VersionColumn:
+    """A column of snapshot dates repeated for every item, as in a forecast waterfall."""
+
+    column: int
+    name: str
+    versions: List[str]  # oldest first
+    rows: Dict[str, int]  # rows per version
+
+    def latest(self, n: int) -> List[str]:
+        return self.versions[-n:]
+
+    def share(self, n: int) -> float:
+        total = sum(self.rows.values())
+        return sum(self.rows[v] for v in self.latest(n)) / total if total else 1.0
 
 
 @dataclass
@@ -115,6 +138,7 @@ class Package:
     tokens: Dict[str, int]  # file name -> estimated tokens
     full_tokens: int  # what the whole workbook's data would cost
     rows_written: int = 0
+    info: Dict[str, object] = field(default_factory=dict)  # for the app: totals, version columns, estimates
 
     @property
     def index(self) -> str:
@@ -135,6 +159,8 @@ class SheetData:
     legend: List[str]
     facts: List[str] = field(default_factory=list)
     category: Optional[int] = None  # column whose values classify the rows (e.g. Demand / Balance)
+    version: Optional[VersionColumn] = None
+    full_tokens: int = 0  # the sheet's data before any row filter
 
 
 class PackageBuilder:
@@ -143,6 +169,7 @@ class PackageBuilder:
         self.title = title
         self.options = options
         self.needles = [n.lower() for n in options.contains if n.strip()]
+        self.filtered = bool(self.needles or options.latest_versions)
         self.xopts = XlsxOptions(header_rows=dict(options.header_rows), visible_only=options.visible_only,
                                  raw_values=True, formulas="summary", recalc_note=options.recalc_note)
 
@@ -156,7 +183,7 @@ class PackageBuilder:
         for sheet in sheets:
             reader.load_sheet(sheet)
             item = self._sheet(sheet)
-            full_tokens += item.tokens if not self.needles else self._unfiltered_tokens
+            full_tokens += item.full_tokens
             data.append(item)
             sheet.cells.clear()
             for pattern in sheet.formula_patterns.values():
@@ -164,7 +191,8 @@ class PackageBuilder:
 
         index_text = self._index(sheets, data, full_tokens)
         data_tokens = sum(d.tokens for d in data)
-        single = estimate_tokens(index_text) + data_tokens <= self.options.budget
+        budget = self.options.budget or (DEFAULT_BUDGET if self.filtered else SMALL_BUDGET)
+        single = estimate_tokens(index_text) + data_tokens <= budget
         files: Dict[str, str] = {}
         if single:
             body = [index_text] + [self._sheet_file_text(d, None, d.blocks) for d in data if d.blocks]
@@ -182,7 +210,29 @@ class PackageBuilder:
             files[INDEX_NAME] = index_text + "\n\n" + self._file_list(files)
         tokens = {name: estimate_tokens(text) for name, text in files.items()}
         return Package(files=files, single=single, tokens=tokens, full_tokens=full_tokens,
-                       rows_written=sum(len(d.rows) for d in data))
+                       rows_written=sum(len(d.rows) for d in data),
+                       info=self._info(data, estimate_tokens(index_text), sum(tokens.values())))
+
+    def _info(self, data: List["SheetData"], index_tokens: int, total_tokens: int) -> Dict[str, object]:
+        """What the app shows on a result: the total, and for version-column workbooks the
+        estimated size of "only the newest one / two versions" (proportional to the rows kept)."""
+        info: Dict[str, object] = {"total_tokens": total_tokens, "filtered": self.filtered}
+        found = [d for d in data if d.version]
+        if not found or self.filtered:
+            return info
+        latest = Counter(d.version.versions[-1] for d in found).most_common(1)[0][0]
+        estimates = {}
+        for n in (1, 2):
+            if all(len(d.version.versions) > n for d in found):
+                estimates[n] = index_tokens + sum(
+                    round(d.full_tokens * d.version.share(n)) if d.version else d.full_tokens for d in data)
+        info["versions"] = {
+            "latest": latest,
+            "count": max(len(d.version.versions) for d in found),
+            "columns": [f"{d.sheet.name}!{col_letter(d.version.column)}" for d in found],
+            "estimates": estimates,
+        }
+        return info
 
     # ----- one sheet -------------------------------------------------------- #
     def _sheet(self, sheet: Sheet) -> SheetData:
@@ -194,9 +244,12 @@ class PackageBuilder:
         names = {c: self._column_name(renderer, header, c) for c in columns}
         rows = [r for r in sorted(cells) if not (self.options.visible_only and r in sheet.hidden_rows)]
         all_rows = len(rows)
-        self._unfiltered_tokens = 0
+        version = self._version_column(sheet, self._body(sheet, header), columns, names)
+        full_tokens = estimate_tokens("\n".join(self._line(sheet, r, columns) for r in rows)) if self.filtered else 0
+        if self.options.latest_versions and version:
+            keep = set(version.latest(self.options.latest_versions))
+            rows = [r for r in rows if r <= header or cells.get(r, {}).get(version.column, Cell("", "s")).text in keep]
         if self.needles:
-            self._unfiltered_tokens = estimate_tokens("\n".join(self._line(sheet, r, columns) for r in rows))
             keep_context = {header, header - 1} if header else set()
             rows = [r for r in rows if r in keep_context or self._matches(cells.get(r, {}))]
             if not any(r not in keep_context for r in rows):
@@ -208,9 +261,42 @@ class PackageBuilder:
         text = "\n".join(lines)
         category = self._category_column(sheet, self._body(sheet, header), columns)
         item = SheetData(sheet, header, reason, columns, names, rows, all_rows, lines, estimate_tokens(text),
-                         self._legend(sheet, columns, names, header, category), category=category)
+                         self._legend(sheet, columns, names, header, category), category=category, version=version)
+        item.full_tokens = full_tokens or item.tokens
         item.facts = self._facts(item)  # needs formula positions, which are freed after this sheet
         return item
+
+    @staticmethod
+    def _version_column(sheet: Sheet, body: List[int], columns: List[int], names: Dict[int, str]) -> Optional[VersionColumn]:
+        """A column of snapshot dates: few distinct dates, each on about as many rows as the
+        others (every item appears in every snapshot), on nearly every row. A PO or ship date
+        column fails the "about as many rows" test, so it is never offered as a version."""
+        best: Optional[VersionColumn] = None
+        for c in columns:
+            texts = []
+            for r in body:
+                cell = sheet.cells.get(r, {}).get(c)
+                if cell is not None:
+                    texts.append(cell.text)
+            if len(texts) < 0.8 * len(body) or len(texts) < 20:
+                continue
+            keys = {}
+            for t in set(texts):
+                m = _DATE_LIKE.match(t)
+                if not m:
+                    break
+                keys[t] = tuple(int(g or 0) for g in m.groups())
+            else:
+                counts = Counter(texts)
+                if not (3 <= len(counts) <= 120 and len(texts) >= 3 * len(counts)):
+                    continue
+                if min(counts.values()) < 0.5 * max(counts.values()):
+                    continue
+                versions = sorted(counts, key=lambda t: keys[t])
+                candidate = VersionColumn(c, names.get(c, ""), versions, dict(counts))
+                if best is None or len(texts) > sum(best.rows.values()):
+                    best = candidate
+        return best
 
     def _matches(self, row: Dict[int, Cell]) -> bool:
         return any(any(n in cell.text.lower() for n in self.needles) for cell in row.values())
@@ -436,6 +522,11 @@ class PackageBuilder:
         if self.needles:
             lines += ["", f"> ⚠️ 已依關鍵字篩選：資料檔只包含含有「{'、'.join(self.options.contains)}」的列（以及表頭列）。"
                           "下方統計仍是整張工作表的結果。"]
+        if self.options.latest_versions:
+            n = self.options.latest_versions
+            shown = "；".join(f"{d.sheet.name} 的 {col_letter(d.version.column)} 欄：{'、'.join(reversed(d.version.latest(n)))}"
+                             for d in data if d.version)
+            lines += ["", f"> ⚠️ 只保留最新 {n} 版的列（{shown}），以及表頭和沒有版本欄的工作表。下方統計仍是整張工作表的結果。"]
         if self.options.visible_only:
             lines += ["", "> ⚠️ 只輸出 Excel 中看得到的工作表、列和欄；隱藏或被篩掉的資料不在檔案裡，統計也只計算看得到的部分。"]
         lines += ["", "## 工作表", "", "| 工作表 | 狀態 | 列數 | 欄數 | 表頭 | 公式 | 資料估計 token |", "|---|---|---|---|---|---|---|"]
@@ -475,6 +566,13 @@ class PackageBuilder:
             facts.append("合併儲存格：" + "、".join(s.merged[:12]) + (f" 等 {len(s.merged)} 個" if len(s.merged) > 12 else "") + "（值只在左上角）")
         if s.comments:
             facts.append(f"註解：{sum(len(v) for v in s.comments.values())} 則，附在這張工作表資料檔的最後")
+        if d.version:
+            v = d.version
+            per = sorted(set(v.rows.values()))
+            rows = f"每版 {per[0]:,} 列" if len(per) == 1 else f"每版 {per[0]:,}～{per[-1]:,} 列"
+            facts.append(f"版本欄：{col_letter(v.column)} 欄{('（' + _md(v.name) + '）') if v.name else ''}，"
+                         f"{len(v.versions)} 個版本（{v.versions[0]} ～ {v.versions[-1]}），{rows}。"
+                         "同一個項目在每一版都有一列，跨版本相加沒有意義；只需要最新資料時，轉換器可以只轉最新一版或兩版")
         category = d.category
         if category:
             facts.append(f"列的分類：{col_letter(category)} 欄（{_md(d.names.get(category, ''))}）。不同分類的列代表不同的量，"

@@ -172,6 +172,28 @@ def test_window(shots: Path | None, prefix: str, timeout: float = 240) -> list:
     sheet_card.copy()
     check("copy puts the card's Markdown on the clipboard", "MarkItDownSmoke" in root.clipboard_get())
     shot("5_panel")
+    # Waterfall workbooks: the card offers "only the newest versions", one click makes that file.
+    from compact_test import build_waterfall
+
+    import panel as panel_module
+
+    waterfall = samples / "waterfall.xlsx"
+    build_waterfall(waterfall)
+    panel_module.OFFER_MIN_TOKENS = 0  # the fixture is small; real workbooks need over 30k tokens
+    panel.add([str(waterfall)])
+    wait(lambda: not panel.busy and not panel.animating, "the waterfall to convert")
+    offers = panel.cards[0].result.offers
+    check("waterfall card offers the newest one and two versions", sorted(offers) == [1, 2] and offers[1] < offers[2],
+          str(offers))
+    panel.convert_latest(str(waterfall), 1)
+    wait(lambda: not panel.busy and not panel.animating, "the newest-version extract")
+    extract = panel.cards[0].result
+    check("newest-version extract is its own small file",
+          extract.output.name == "waterfall_最新1版.md" and extract.variant == "只含最新 1 版"
+          and extract.tokens < panel.cards[1].result.tokens, f"{extract.output} {extract.tokens}")
+    panel.copy_instructions()
+    check("Claude Project instructions on the clipboard", "00_索引與邏輯.md" in root.clipboard_get())
+
     panel.clear()
     wait(lambda: not panel.animating, "the well to open up again")
     pump(0.1)

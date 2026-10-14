@@ -11,16 +11,24 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import convert
 from motion import EASE, EASE_IN_OUT, EASE_OUT, Motion, blend, reduced_motion
-from xlsx_compact import INDEX_NAME, estimate_tokens
+from xlsx_compact import CONVERSATION_BUDGET, INDEX_NAME, SMALL_BUDGET, estimate_tokens
 
 PANEL_TITLE = "快速轉換"
 MAX_CARDS = 30
+OFFER_MIN_TOKENS = SMALL_BUDGET  # "only the newest versions" is offered only when the whole is this big
+
+# Pasted once into a Claude Project's instructions, so every conversation starts small.
+PROJECT_INSTRUCTIONS = """我會上傳用「MarkItDown 轉換器」從 Excel 轉出的檔案。請照這個方式處理：
+1. 先只讀「00_索引與邏輯.md」。它列出每張工作表、每一欄的類型，以及程式精確算好的合計、最大值、最小值和公式邏輯；這些數字可以直接引用，不要自己加總大量數字。
+2. 能用索引回答就直接回答。需要明細時，告訴我要上傳哪一個資料檔（檔名和大約 token 數在索引最後的「資料檔」表），一次只要需要的那幾個，不要要求整包。
+3. 問題只跟某個料號、客戶，或只跟最新的預測版本有關時，提醒我用轉換器的關鍵字篩選或「只轉最新一版」重新轉一次，檔案會小很多。
+4. 資料是 Tab 分隔，第一欄是 Excel 列號（後面有 h 表示該列在 Excel 中隱藏），數值是完整精度。引用數字時請註明工作表和儲存格位置（例如 Summary!F12）。"""
 
 # Motion budget (see motion.py). Nothing animates on a keyboard action, and with
 # Windows' animation effects off nothing moves or resizes; colour fades stay, shorter.
@@ -46,6 +54,10 @@ class PanelResult:
     excel: bool = False
     error: Optional[str] = None
     error_type: Optional[str] = None
+    total_tokens: int = 0  # index + every data file
+    latest: str = ""  # newest version of the workbook's version column, if it has one
+    offers: Dict[int, int] = field(default_factory=dict)  # newest N versions -> estimated tokens
+    variant: str = ""  # e.g. "只含最新 1 版" for an extract
 
     @property
     def ok(self) -> bool:
@@ -63,7 +75,7 @@ def describe_tokens(n: int) -> str:
     return f"約 {max(n, 1):,} token"
 
 
-def measure(result: "convert.Result") -> PanelResult:
+def measure(result: "convert.Result", variant: str = "") -> PanelResult:
     """Token estimates for a conversion result (runs on the worker thread)."""
     source = result.source.value
     excel = convert.is_excel_file(result.source)
@@ -71,11 +83,16 @@ def measure(result: "convert.Result") -> PanelResult:
         return PanelResult(source, error=result.error or "沒有輸出", error_type=result.error_type, excel=excel)
     output = Path(result.output)
     text = result.markdown if result.markdown is not None else _read(output)
-    item = PanelResult(source, output, estimate_tokens(text), excel=excel)
+    item = PanelResult(source, output, estimate_tokens(text), excel=excel, variant=variant)
     if output.name == INDEX_NAME:
         for data in sorted(output.parent.glob("[0-9][0-9]_*.md")):
             item.data_files += 1
             item.data_tokens += estimate_tokens(_read(data))
+    item.total_tokens = item.tokens + item.data_tokens
+    versions = (result.info or {}).get("versions") or {}
+    item.latest = str(versions.get("latest", ""))
+    if item.total_tokens > OFFER_MIN_TOKENS:  # a small file is handed over whole; no extra choices
+        item.offers = {int(n): int(t) for n, t in (versions.get("estimates") or {}).items()}
     return item
 
 
@@ -120,7 +137,7 @@ class QuickPanel:
         self.scale = app.scale
         self.dnd = app.dnd
         self.events: "queue.Queue[tuple]" = queue.Queue()
-        self.pending: List[str] = []  # dropped while busy: converted next
+        self.pending: List[Tuple[List[str], dict]] = []  # (paths, extra options) waiting for the current batch
         self.busy = False
         self.hovering = False
         self.status = ""
@@ -129,6 +146,9 @@ class QuickPanel:
         self.cards: List[ResultCard] = []
         self.pinned = tk.BooleanVar(value=True)
         self.reduce_motion = reduced_motion()
+        body = app.fonts["body"]
+        self.link_font = app.tkfont.Font(root=app.root, family=body.actual("family"), size=body.actual("size"),
+                                         underline=True)
         self._compact: Optional[bool] = None  # well layout: None until first laid out
         self._next_enter = 0.0  # perf_counter time the next card may start entering (stagger)
 
@@ -205,12 +225,19 @@ class QuickPanel:
         self.footer = footer
         footer.grid(row=3, column=0, sticky="ew", pady=(round(10 * k), 0))
         footer.columnconfigure(0, weight=1)
+        # Row 1: what the settings are (full width, so it is never cut off). Row 2: float switch,
+        # and the less frequent actions behind "更多".
         self.settings_label = ttk.Label(footer, style="Secondary.TLabel")
-        self.settings_label.grid(row=0, column=0, sticky="w")
-        ttk.Button(footer, text="選項…", command=self.show_main_window).grid(row=0, column=1, sticky="e")
+        self.settings_label.grid(row=0, column=0, columnspan=2, sticky="w")
         self.pin_switch = ttk.Checkbutton(footer, text="浮在其他視窗上方", variable=self.pinned, command=self._apply_pin,
                                           style="Switch.TCheckbutton" if self.app.sv_ttk else "TCheckbutton")
-        self.pin_switch.grid(row=1, column=0, columnspan=2, sticky="w", pady=(round(6 * k), 0))
+        self.pin_switch.grid(row=1, column=0, sticky="w", pady=(round(6 * k), 0))
+        self.more_button = ttk.Menubutton(footer, text="更多")
+        self.more_button.grid(row=1, column=1, sticky="e", pady=(round(6 * k), 0))
+        more = tk.Menu(self.more_button, tearoff=False)
+        more.add_command(label="轉換選項…", command=self.show_main_window)
+        more.add_command(label="複製 Claude 專案指示", command=self.copy_instructions)
+        self.more_button["menu"] = more
 
         if self.dnd is not None:
             for widget in (self.win, self.well, self.list_canvas, self.list_frame):
@@ -445,19 +472,32 @@ class QuickPanel:
         if paths:
             self.add(paths)
 
-    def add(self, paths) -> None:
+    def add(self, paths, extra: Optional[dict] = None) -> None:
+        """Convert files; ``extra`` adds options for this batch (e.g. only the newest versions)."""
         values = [str(p) for p in paths if str(p).strip()]
         if not values:
             return
         if self.busy:
-            self.pending.extend(values)
+            self.pending.append((values, dict(extra or {})))
             self.progress_value = (self.progress_value[0], self.progress_value[1] + len(convert.collect_sources(values, recursive=True)))
             self._animate_progress()
             self._draw_well()
             return
-        self._start(values)
+        self._start(values, extra)
 
-    def _start(self, values: List[str]) -> None:
+    def convert_latest(self, source: str, n: int) -> None:
+        """Re-convert a workbook keeping only the newest ``n`` versions: a small file to hand over."""
+        self.add([source], {"xlsx_latest_versions": n, "output_suffix": f"_最新{n}版",
+                            "variant": f"只含最新 {n} 版"})
+
+    def _options(self, extra: Optional[dict]) -> Tuple[dict, str]:
+        options = dict(self.app.conversion_options())
+        extra = dict(extra or {})
+        variant = extra.pop("variant", "")
+        options.update(extra)
+        return options, variant
+
+    def _start(self, values: List[str], extra: Optional[dict] = None) -> None:
         sources = convert.collect_sources(values, recursive=self.app.recursive.get())
         if not sources:
             self._add_card(PanelResult(values[0], error="沒有可以轉換的檔案", error_type="UnsupportedFormatException"))
@@ -468,10 +508,11 @@ class QuickPanel:
         self.motion.set("progress", 0.0)
         self.progress.configure(value=0)
         self._draw_well()
-        args = (sources, self.app.output_destination(), self.app.keep_data_uris.get(), self.app.conversion_options())
+        options, variant = self._options(extra)
+        args = (sources, self.app.output_destination(), self.app.keep_data_uris.get(), options, variant)
         threading.Thread(target=self._worker, args=args, daemon=True).start()
 
-    def _worker(self, sources, out_dir, keep_data_uris, options) -> None:
+    def _worker(self, sources, out_dir, keep_data_uris, options, variant="") -> None:
         try:
             converter = self.app._load_converter()
             if converter is None:
@@ -480,7 +521,7 @@ class QuickPanel:
             convert.convert_batch(
                 converter, sources, out_dir, keep_data_uris=keep_data_uris, options=options,
                 on_start=lambda n, t, s: self.events.put(("working", n, t, Path(s.value).name)),
-                on_result=lambda n, t, r: self.events.put(("result", n, measure(r))),
+                on_result=lambda n, t, r: self.events.put(("result", n, measure(r, variant))),
                 progress=lambda message: self.events.put(("status", message)),
             )
         except Exception as exc:
@@ -515,10 +556,11 @@ class QuickPanel:
             self._add_card(PanelResult("轉換引擎", error=event[1]))
         elif kind == "finished":
             if self.pending:
-                values, self.pending = self.pending, []
+                values, extra = self.pending.pop(0)
                 self._offset = self.progress_value[0]
                 sources = convert.collect_sources(values, recursive=self.app.recursive.get())
-                args = (sources, self.app.output_destination(), self.app.keep_data_uris.get(), self.app.conversion_options())
+                options, variant = self._options(extra)
+                args = (sources, self.app.output_destination(), self.app.keep_data_uris.get(), options, variant)
                 threading.Thread(target=self._worker, args=args, daemon=True).start()
             else:
                 self.busy = False
@@ -562,6 +604,16 @@ class QuickPanel:
                 return
         if self.cards:
             next((c for c in self.cards if c.result.ok), self.cards[0]).copy()
+
+    def copy_instructions(self) -> None:
+        """The standing instructions for a Claude Project: index first, data files on request."""
+        self.win.clipboard_clear()
+        self.win.clipboard_append(PROJECT_INSTRUCTIONS)
+        label = self.settings_label
+        previous = label.cget("text")
+        label.configure(text="✓ 已複製。貼到 Claude 專案的「指示」欄位",
+                        foreground=self.colors["success"])
+        self.win.after(4000, lambda: label.winfo_exists() and label.configure(text=previous, foreground=""))
 
     # ----- window ---------------------------------------------------------- #
     def _apply_pin(self) -> None:
@@ -675,14 +727,28 @@ class ResultCard:
                 x = c.bbox(items[-1])[2] + round(8 * k)
                 c.create_text(x, y, text="✓ 已逐格核對", font=fonts["body"], fill=ink(colors["success"]), anchor="nw")
             y = c.bbox(items[-1])[3] + round(3 * k)
-            quiet = []
+            lines = []
             if r.data_files:  # a split workbook: the index is what to hand over first
-                quiet.append(f"同資料夾另有 {r.data_files} 個資料檔，共{describe_tokens(r.data_tokens)}")
-            quiet.append(f"來自 {Path(r.source).name}")
-            for text in quiet:
+                lines.append(("先拖這張就好，Claude 會說還要哪個檔", colors["text"]))
+                lines.append((f"同資料夾另有 {r.data_files} 個資料檔，共{describe_tokens(r.data_tokens)}", colors["secondary"]))
+            if r.total_tokens > CONVERSATION_BUDGET:
+                lines.append((f"⚠ 全部{describe_tokens(r.total_tokens)}，太大，別整包上傳", colors["caution"]))
+            for text, color in lines:
                 items.append(c.create_text(text_x, y, text=fit_text(fonts["caption"], text, text_w),
-                                           font=fonts["caption"], fill=ink(colors["secondary"]), anchor="nw"))
+                                           font=fonts["caption"], fill=ink(color), anchor="nw"))
                 y = c.bbox(items[-1])[3] + round(3 * k)
+            # One-click extracts for waterfall-style workbooks: the newest version(s) only.
+            for n, estimate in sorted(r.offers.items()):
+                label = ("只轉最新一版" if n == 1 else f"只轉最新 {n} 版") + f" · {describe_tokens(estimate)}"
+                tag = f"offer{n}"
+                items.append(c.create_text(text_x, y, text="→ " + fit_text(self.panel.link_font, label, text_w - round(16 * k)),
+                                           font=self.panel.link_font, fill=ink(colors["accent"]), anchor="nw", tags=(tag,)))
+                c.tag_bind(tag, "<ButtonRelease-1>", lambda _e, n=n: self.panel.convert_latest(r.source, n))
+                y = c.bbox(items[-1])[3] + round(4 * k)
+            source = f"來自 {Path(r.source).name}" + (f" · {r.variant}" if r.variant else "")
+            items.append(c.create_text(text_x, y, text=fit_text(fonts["caption"], source, text_w),
+                                       font=fonts["caption"], fill=ink(colors["secondary"]), anchor="nw"))
+            y = c.bbox(items[-1])[3] + round(3 * k)
         else:
             from gui import friendly_error
 
@@ -770,6 +836,11 @@ class ResultCard:
         menu.add_separator()
         menu.add_command(label="複製內容", accelerator="Ctrl+Shift+C", command=self.copy, state=state)
         menu.add_command(label="複製檔案路徑", command=self.copy_path, state=state)
+        if self.result.offers:
+            menu.add_separator()
+            for n in sorted(self.result.offers):
+                menu.add_command(label="只轉最新一版" if n == 1 else f"只轉最新 {n} 版",
+                                 command=lambda n=n: self.panel.convert_latest(self.result.source, n))
         if keyboard:
             x, y = self.canvas.winfo_rootx() + 20, self.canvas.winfo_rooty() + 20
         else:

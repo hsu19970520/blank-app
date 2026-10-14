@@ -36,7 +36,9 @@ Check it works with `RUN --version`.
 
 Excel options: `--xlsx-format compact|readable` (default `compact`, the token-saving
 package described in section 4), `--xlsx-rows-containing TEXT` (compact: keep only rows
-containing TEXT, case-insensitive, repeatable), `--xlsx-part-tokens N` (compact: split
+containing TEXT, case-insensitive, repeatable), `--xlsx-latest N` (compact: in sheets
+with a version column, i.e. snapshot dates repeated for every item as in a forecast
+waterfall, keep only the newest N versions), `--xlsx-part-tokens N` (compact: split
 into files of about N tokens), `--xlsx-header-row "SHEET=ROW"` (override the detected
 header row; repeatable), `--xlsx-visible-only` (leave out hidden sheets / rows / columns,
 i.e. what Excel shows), `--xlsx-raw-values` (readable: full-precision numbers instead of
@@ -80,7 +82,7 @@ Batch runs report each item as `(i/n) [OK] src -> dest.md`.
 - **PDF:** text layer only. A scanned PDF with no text layer yields little or no
   output. Say so, and suggest OCR or `--docintel-endpoint`.
 - **Excel (.xlsx/.xlsm), default `compact` package:** small workbooks give one `.md`
-  file; workbooks over about 150k tokens give a folder `<name>_md/` holding
+  file; workbooks over about 30k tokens (or a filtered extract over about 150k) give a folder `<name>_md/` holding
   `00_索引與邏輯.md` (the index) and one file per sheet, split into `_第N部分` parts when
   large. How to use it:
   - **Read the index first.** Per sheet it lists every column (Excel letter, name, type,

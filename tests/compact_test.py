@@ -68,6 +68,27 @@ def build_big(path: Path) -> None:
     wb.save(path)
 
 
+def build_waterfall(path: Path) -> None:
+    """A forecast waterfall: every part number again in each weekly snapshot (version column C),
+    plus a PO sheet whose order dates are dates too but not snapshots (uneven counts)."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "By MPN"
+    ws.append(["MPN", "Site", "", "W1", "W2", "W3", "TTL"])
+    versions = ["2026/09/07", "2026/09/14", "2026/09/21", "2026/09/28", "2026/10/05"]
+    for v, version in enumerate(versions):
+        for i in range(30):
+            weeks = [(i + 1) * 10 + v, (i + 2) * 10 + v, (i + 3) * 10 + v]
+            ws.append([f"PN-{i:03d}", "TW" if i % 3 else "VN", version, *weeks, sum(weeks)])
+    po = wb.create_sheet("PO")
+    po.append(["PO", "Order date", "Qty"])
+    for i in range(60):
+        po.append([f"PO-{i}", "2026/09/01" if i < 45 else f"2026/09/{2 + i % 5:02d}", i])
+    wb.save(path)
+
+
 def same_moment(field: str, value) -> bool:
     """Dates are written in full whatever the cell format shows: YYYY-MM-DD[ hh:mm:ss[.fff]]."""
     try:
@@ -288,7 +309,36 @@ def main() -> int:
         check("merged label names only its first column",
               "| A | MPN |" in waterfall and "| B |  |" in waterfall and "| C |  |" in waterfall, waterfall[:2500])
 
-        # 8. The readable form is still available.
+        # 8. Waterfall workbooks: the snapshot column is found, "newest N versions" keeps just those rows.
+        waterfall_book = tmp / "waterfall.xlsx"
+        build_waterfall(waterfall_book)
+        wf = run(waterfall_book)
+        check("version column found with its range", "版本欄：C 欄" in wf and "5 個版本（2026/09/07 ～ 2026/10/05），每版 30 列" in wf,
+              wf[:3000])
+        check("order dates are not mistaken for versions", wf.count("版本欄：") == 1)
+        latest = run(waterfall_book, "--xlsx-latest", "1")
+        mpn = next((lines for sheet, lines in tsv_blocks([latest]) if sheet == "By MPN"), [])
+        kept = {line.split("\t")[3] for line in mpn[2:]}
+        check("--xlsx-latest 1 keeps the header and only the newest version", len(mpn) == 32 and kept == {"2026/10/05"},
+              f"{len(mpn)} {kept}")
+        check("latest filter is announced, statistics stay whole-sheet",
+              "只保留最新 1 版的列" in latest and "## 資料：PO" in latest)
+        two = run(waterfall_book, "--xlsx-latest", "2")
+        mpn2 = next((lines for sheet, lines in tsv_blocks([two]) if sheet == "By MPN"), [])
+        check("--xlsx-latest 2 keeps the newest two", {line.split("\t")[3] for line in mpn2[2:]} == {"2026/10/05", "2026/09/28"})
+        compare_with_openpyxl(waterfall_book, [latest], check, "latest-version extract",
+                              only_rows={"By MPN": {1} | set(range(2 + 4 * 30, 2 + 5 * 30)), "PO": set(range(1, 62))})
+        run(waterfall_book, "--xlsx-format", "readable", "--xlsx-latest", "1", expect=2)
+
+        # 9. A whole workbook over ~30k tokens is split so the index can go first; a filtered
+        #    extract stays one file up to ~150k so it can be handed over in one piece.
+        out2 = tmp / "out2"
+        run(big, "--out-dir", out2)
+        check("unfiltered workbook over 30k tokens is split", (out2 / "big_md" / INDEX).exists())
+        run(big, "--out-dir", out2, "--xlsx-rows-containing", "PART-0")
+        check("filtered extract stays one file", (out2 / "big.md").exists())
+
+        # 10. The readable form is still available.
         readable = run(book, "--xlsx-format", "readable")
         check("readable format still available", "| 列 | MPN (A) | Brand (B·隱) | Qty (C) |" in readable)
 

@@ -39,7 +39,7 @@ warnings.filterwarnings("ignore", message=".*ffmpeg.*", category=RuntimeWarning)
 # it loads. Set ORT_DISABLE_TELEMETRY=0 to allow it.
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
-TOOL_VERSION = "1.6.1"
+TOOL_VERSION = "1.7.0"
 
 # File types MarkItDown can convert. Used when scanning folders; explicit file
 # arguments are always attempted regardless of extension.
@@ -106,6 +106,7 @@ class Result:
     markdown: Optional[str]
     error: Optional[str]
     error_type: Optional[str] = None  # exception class name, for friendlier UI messages
+    info: Optional[Dict[str, object]] = None  # Excel package facts for the app (totals, version columns)
 
     @property
     def ok(self) -> bool:
@@ -119,6 +120,7 @@ class Converted:
 
     markdown: str
     files: Optional[Dict[str, str]] = None  # file name -> content (index first)
+    info: Optional[Dict[str, object]] = None  # Excel package: total tokens, version columns, estimates
 
 
 def is_url(value: str) -> bool:
@@ -185,6 +187,7 @@ def plan_output(
     source: Source,
     out_dir: Optional[Path],
     taken: Set[Path],
+    suffix: str = "",
 ) -> Path:
     """Pick a non-colliding .md path for a source (batch mode)."""
     if source.is_url:
@@ -201,8 +204,8 @@ def plan_output(
             base_dir = out_dir / src.parent.relative_to(source.scan_root)
         else:
             base_dir = out_dir
-        stem = src.stem
-        alt_stem = f"{src.stem}.{src.suffix.lstrip('.')}" if src.suffix else None
+        stem = src.stem + suffix
+        alt_stem = f"{src.stem}.{src.suffix.lstrip('.')}{suffix}" if src.suffix else None
 
     candidates = [base_dir / f"{stem}.md"]
     if alt_stem:
@@ -284,6 +287,7 @@ def convert_document(
     recalc = options.pop("xlsx_recalc", False)
     xlsx_format = options.pop("xlsx_format", "compact")
     contains = options.pop("xlsx_rows_containing", None) or []
+    latest = int(options.pop("xlsx_latest_versions", 0) or 0)
     part_tokens = options.pop("xlsx_part_tokens", None)
     if options.get("xlsx_formulas") == "cells":
         xlsx_format = "readable"
@@ -301,6 +305,7 @@ def convert_document(
             compact = CompactOptions(
                 visible_only=bool(options.get("xlsx_visible_only")),
                 contains=list(contains),
+                latest_versions=latest,
                 header_rows=dict(options.get("xlsx_header_rows") or {}),
                 recalc_note=note,
             )
@@ -309,7 +314,7 @@ def convert_document(
             if progress:
                 progress("正在整理 Excel 資料並逐格核對…")
             package = build_package(path, Path(source.value).name, compact)
-            return Converted(package.index, None if package.single else package.files)
+            return Converted(package.index, None if package.single else package.files, package.info)
         if note:
             options["xlsx_recalc_note"] = note
         if source.is_stdin:
@@ -393,20 +398,22 @@ def convert_batch(
     taken: Set[Path] = set()
     results: List[Result] = []
     total = len(sources)
+    options = dict(options or {})
+    suffix = options.pop("output_suffix", "")  # e.g. "_最新1版", so an extract never overwrites the full package
     for index, source in enumerate(sources, start=1):
         if should_stop and should_stop():
             break
         if on_start:
             on_start(index, total, source)
-        output = plan_output(source, out_dir, taken)
+        output = plan_output(source, out_dir, taken, suffix)
         existing = [p for p in (output, package_index(output)) if p.exists()]
         if skip_existing and existing:
             result = Result(source, existing[0], None, None)
         else:
             try:
-                converted = convert_document(converter, source, stream_info, keep_data_uris, progress, **(options or {}))
+                converted = convert_document(converter, source, stream_info, keep_data_uris, progress, **options)
                 written = write_converted(converted, output)
-                result = Result(source, written, converted.markdown, None)
+                result = Result(source, written, converted.markdown, None, info=converted.info)
             except Exception as exc:  # report and keep going with the rest of the batch
                 result = Result(source, None, None, describe_error(exc), type(exc).__name__)
         results.append(result)
@@ -464,6 +471,9 @@ def build_parser(prog: str = "markitdown") -> argparse.ArgumentParser:
     excel.add_argument("--xlsx-rows-containing", action="append", default=[], metavar="TEXT",
                        help="compact: keep only rows containing TEXT (case-insensitive; repeatable = any of them). "
                             "Header rows are kept and the index statistics still cover the whole sheet")
+    excel.add_argument("--xlsx-latest", type=int, default=0, metavar="N",
+                       help="compact: in sheets with a version column (snapshot dates repeated for every item, "
+                            "as in a forecast waterfall) keep only the rows of the newest N versions")
     excel.add_argument("--xlsx-part-tokens", type=int, default=None, metavar="N",
                        help="compact: at most about N tokens per file; bigger workbooks are split "
                             "(default: one file up to 150000, otherwise parts of 100000)")
@@ -548,11 +558,16 @@ def main(argv: Optional[List[str]] = None, prog: str = "markitdown") -> int:
         header_rows[sheet.strip()] = int(row)
     if args.xlsx_rows_containing and (args.xlsx_format != "compact" or args.xlsx_formulas == "cells"):
         parser.error("--xlsx-rows-containing works with the compact format only")
+    if args.xlsx_latest and (args.xlsx_format != "compact" or args.xlsx_formulas == "cells"):
+        parser.error("--xlsx-latest works with the compact format only")
+    if args.xlsx_latest < 0:
+        parser.error("--xlsx-latest must be 1 or more")
     if args.xlsx_part_tokens is not None and args.xlsx_part_tokens < 1000:
         parser.error("--xlsx-part-tokens must be at least 1000")
     options = {
         "xlsx_format": "readable" if args.xlsx_classic else args.xlsx_format,
         "xlsx_rows_containing": args.xlsx_rows_containing,
+        "xlsx_latest_versions": args.xlsx_latest,
         "xlsx_part_tokens": args.xlsx_part_tokens,
         "xlsx_visible_only": args.xlsx_visible_only,
         "xlsx_raw_values": args.xlsx_raw_values,
