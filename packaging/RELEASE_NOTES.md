@@ -1,6 +1,11 @@
 把 Microsoft [MarkItDown](https://github.com/microsoft/markitdown) 打包成 Windows 執行檔和 Claude skill，可以把 PDF、Word、PowerPoint、Excel、HTML、CSV、JSON、XML、EPUB、ZIP、Outlook .msg、Jupyter Notebook 和網頁（包含 YouTube、Wikipedia）轉成 Markdown。
 
-## 這個版本的更新（1.7.0）
+## 這個版本的更新（1.7.1）
+
+- 新增**使用說明書**，中文版和英文版都有 PDF（直接閱讀或列印）和 Word（可以修改）兩種格式，附在下載頁。內容包含下載與開啟、快速轉換面板、怎麼上傳給 Claude 最省 token、設定 Claude 專案指示、看懂轉出來的檔案、一個從頭到尾的使用範例、選項說明、常見問題和命令列用法。
+- 程式功能和 1.7.0 相同。
+
+### 1.7.0
 
 讓最省 token 的做法變成預設，不需要先學會怎麼用：
 

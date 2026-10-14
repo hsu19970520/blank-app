@@ -88,7 +88,7 @@ const content = require(path.join(__dirname, `content.${LANG}.js`))({
 const children = content.children;
 
 const doc = new Document({
-  creator: content.creator, title: content.title, description: "v1.7.0",
+  creator: content.creator, title: content.title, description: "v1.7.1",
   styles: {
     default: { document: { run: { font: FONT, size: 22 } } },
     paragraphStyles: [
