@@ -87,6 +87,8 @@ jobs:
             dist/markitdown-skill.zip
             dist/markitdown-skill-windows.zip
             dist/SHA256SUMS.txt
+            docs/MarkItDown-Guide-zh-TW.pdf
+            docs/MarkItDown-Guide-zh-TW.docx
           if-no-files-found: error
 
       - name: Upload GUI screenshots
@@ -112,3 +114,5 @@ jobs:
             dist/markitdown-skill.zip
             dist/markitdown-skill-windows.zip
             dist/SHA256SUMS.txt
+            docs/MarkItDown-Guide-zh-TW.pdf
+            docs/MarkItDown-Guide-zh-TW.docx

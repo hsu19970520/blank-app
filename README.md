@@ -14,6 +14,7 @@
 | 檔案 | 用途 |
 |---|---|
 | `markitdown.exe` | Windows 單一執行檔 |
+| `MarkItDown-Guide-zh-TW.pdf` / `.docx` | 使用說明書（給同事看的，PDF 直接閱讀、Word 可以修改） |
 | `markitdown-skill-windows.zip` | Claude skill，內附 `markitdown.exe`（Windows 上的 Claude Code 用這個） |
 | `markitdown-skill.zip` | Claude skill，只有腳本（macOS/Linux，或上傳到 Claude App） |
 
@@ -124,6 +125,7 @@ tests/gui_smoke_test.py               圖形介面測試
 tests/xlsx_test.py                    Excel 轉換測試（表頭、數字格式、公式、隱藏、註解、樞紐）
 tests/recalc_test.py                  用 Excel 重新計算的測試（以模擬的 Excel 檢查流程）
 tests/compact_test.py                 精簡版 Excel 測試（逐格和 openpyxl 比對、分檔、關鍵字篩選）
+docs/MarkItDown-Guide-zh-TW.pdf/.docx  使用說明書（docs/manual/ 是產生它的腳本與截圖）
 .github/workflows/build-windows-exe.yml  Windows 自動建置、測試與發佈
 ```
 

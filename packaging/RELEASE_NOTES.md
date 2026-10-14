@@ -74,6 +74,8 @@
 | `markitdown-skill-windows.zip` | Claude skill，內附 `markitdown.exe`（Windows 上的 Claude Code 用這個）。 |
 | `markitdown-skill.zip` | Claude skill，僅含腳本（macOS / Linux，或上傳到 Claude App；需要 `pip install "markitdown[all]"`）。 |
 | `SHA256SUMS.txt` | 檔案雜湊值，可用來驗證下載內容。 |
+| `MarkItDown-Guide-zh-TW.pdf` | **使用說明書**（PDF，直接閱讀或列印）。 |
+| `MarkItDown-Guide-zh-TW.docx` | 使用說明書（Word，可以依團隊需要修改）。 |
 
 ## markitdown.exe 用法
 

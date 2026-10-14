@@ -1,0 +1,24 @@
+@page { size: A4; margin: 20mm 20mm 22mm; @bottom-center { content: "MarkItDown 轉換器 使用說明書 v1.7.0 · 第 " counter(page) " 頁"; font-size: 8.5pt; color: #5D5D5D; } }
+body { font-family: "Microsoft JhengHei", "WenQuanYi Zen Hei", sans-serif; font-size: 10.5pt; line-height: 1.65; color: #1C1C1C; }
+.cover { padding-top: 70mm; }
+.cover .t1 { font-size: 30pt; font-weight: bold; color: #005FB8; }
+.cover .t2 { font-size: 21pt; font-weight: bold; margin-top: 6pt; }
+.cover .t3 { font-size: 13pt; color: #5D5D5D; margin: 10pt 0 34pt; }
+.cover .meta { color: #5D5D5D; margin-bottom: 30pt; }
+.pb { page-break-after: always; }
+h1 { color: #005FB8; font-size: 16pt; margin: 22pt 0 8pt; page-break-after: avoid; border-bottom: 1px solid #DCE6F2; padding-bottom: 3pt; }
+h2 { font-size: 12.5pt; margin: 14pt 0 5pt; page-break-after: avoid; }
+p { margin: 0 0 6pt; }
+ul, ol { margin: 0 0 8pt; padding-left: 20pt; }
+li { margin-bottom: 3pt; }
+.box { background: #F4F7FB; border-left: 4px solid #005FB8; padding: 8pt 12pt 4pt; margin: 6pt 0 12pt; page-break-inside: avoid; }
+.box.warn { background: #FFF6E5; border-left-color: #C27C0E; }
+table { border-collapse: collapse; width: 100%; margin: 6pt 0 12pt; font-size: 9.5pt; page-break-inside: avoid; }
+th, td { border: 1px solid #D0D0D0; padding: 4pt 6pt; vertical-align: top; text-align: left; }
+th { background: #EEF3F9; }
+tr { page-break-inside: avoid; }
+figure { margin: 8pt 0 10pt; text-align: center; page-break-inside: avoid; }
+figure img { border: 1px solid #DDDDDD; }
+figcaption { font-size: 8.5pt; color: #5D5D5D; margin-top: 3pt; }
+code { font-family: Consolas, "DejaVu Sans Mono", monospace; background: #F0F0F0; padding: 0 2pt; font-size: 9.5pt; }
+.q { color: #005FB8; font-weight: bold; margin: 10pt 0 2pt; }
