@@ -39,7 +39,7 @@ warnings.filterwarnings("ignore", message=".*ffmpeg.*", category=RuntimeWarning)
 # it loads. Set ORT_DISABLE_TELEMETRY=0 to allow it.
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
-TOOL_VERSION = "1.6.0"
+TOOL_VERSION = "1.6.1"
 
 # File types MarkItDown can convert. Used when scanning folders; explicit file
 # arguments are always attempted regardless of extension.

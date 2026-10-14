@@ -1,6 +1,10 @@
 把 Microsoft [MarkItDown](https://github.com/microsoft/markitdown) 打包成 Windows 執行檔和 Claude skill，可以把 PDF、Word、PowerPoint、Excel、HTML、CSV、JSON、XML、EPUB、ZIP、Outlook .msg、Jupyter Notebook 和網頁（包含 YouTube、Wikipedia）轉成 Markdown。
 
-## 這個版本的更新（1.6.0）
+## 這個版本的更新（1.6.1）
+
+- 修正：表頭如果是跨好幾欄的合併儲存格（例如「MPN」合併了 A1:E2），之前每一欄都會被叫做「MPN」，連實際上是 Site、Brand 的欄也是。現在只有第一欄會用這個名稱，其他欄維持空白，跟 Excel 裡一樣；這些欄的內容可以從索引的統計看出來。跨兩列的表頭（例如 B1:B2）照舊會當成那一欄的名稱。
+
+### 1.6.0
 
 - **快速轉換面板更精緻，加上動畫**（依照 Emil Kowalski 的設計工程原則）：
   - 檔案拖到面板上方時，外框和底色會在 0.15 秒內漸變成藍色，文字在變換的瞬間淡出再淡入，箭頭也會往下移一點；拖走時復原得比較快（0.1 秒）。

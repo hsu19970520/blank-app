@@ -915,10 +915,11 @@ class SheetRenderer:
             top = sheet.cells.get(b[0], {}).get(b[1])
             if top is None:
                 continue
-            for r in range(b[0], b[2] + 1):
-                for c in range(b[1], b[3] + 1):
-                    if (r, c) != (b[0], b[1]):
-                        self.merged_values[(r, c)] = top
+            # Only down the first column: a header merged over two rows names its column, but
+            # a label merged across several columns (A1:E2 "MPN") names only the first one;
+            # repeating it would call Site, Brand ... "MPN" too.
+            for r in range(b[0] + 1, b[2] + 1):
+                self.merged_values[(r, b[1])] = top
         self.notes: Dict[Tuple[int, int], int] = {}
         for i, ref in enumerate(sorted(sheet.comments, key=self._ref_key), start=1):
             m = _REF.fullmatch(ref or "")

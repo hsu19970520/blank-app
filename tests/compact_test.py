@@ -269,7 +269,26 @@ def main() -> int:
         check("stdout gets the index of a split package", proc.returncode == 0 and "## 資料檔" in out_text and "```tsv" not in out_text)
         check("stdout note explains how to get the data", "--out-dir" in proc.stderr.decode("utf-8", "replace"))
 
-        # 7. The readable form is still available.
+        # 7. A label merged across several columns names only its first column
+        #    (a waterfall sheet with "MPN" merged over A1:C2 must not call Site and Brand "MPN").
+        from openpyxl import Workbook
+
+        merged_book = tmp / "merged header.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Waterfall"
+        ws["A1"], ws["D1"], ws["D2"] = "MPN", "Weekly", "06/15"
+        ws.merge_cells("A1:C2")
+        for r, row in enumerate([("PN-1", "TW", "MPS", 5), ("PN-2", "VN", "NXP", 7)], start=3):
+            for c, value in enumerate(row, start=1):
+                ws.cell(r, c, value)
+        ws.freeze_panes = "A3"
+        wb.save(merged_book)
+        waterfall = run(merged_book)
+        check("merged label names only its first column",
+              "| A | MPN |" in waterfall and "| B |  |" in waterfall and "| C |  |" in waterfall, waterfall[:2500])
+
+        # 8. The readable form is still available.
         readable = run(book, "--xlsx-format", "readable")
         check("readable format still available", "| 列 | MPN (A) | Brand (B·隱) | Qty (C) |" in readable)
 
